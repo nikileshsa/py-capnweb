@@ -1,5 +1,7 @@
 # Cap'n Web Python
 
+> ⚠️ **Beta Version** - This library is under active development and not yet production-ready. APIs may change. Use at your own risk in production environments.
+
 A complete Python implementation of the [Cap'n Web protocol](https://github.com/cloudflare/capnweb) - a capability-based RPC system with promise pipelining, structured errors, and multiple transport support.
 
 ## What's in the Box

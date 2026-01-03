@@ -1,5 +1,7 @@
 # Cap'n Web Python Documentation
 
+> ⚠️ **Beta Version** - This library is under active development and not yet production-ready. APIs may change.
+
 Welcome to the Cap'n Web Python documentation!
 
 ## Getting Started

@@ -1,5 +1,7 @@
 # Cap'n Web Python - Quickstart Guide
 
+> ⚠️ **Beta Version** - This library is under active development and not yet production-ready. APIs may change.
+
 Get up and running with Cap'n Web Python in 5 minutes.
 
 ## What is Cap'n Web?
