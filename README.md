@@ -98,7 +98,7 @@ balance = await account.getBalance()  # Pythonic API!
 await account.deposit(500.0)
 ```
 
-## Current Status (v0.6.0)
+## Current Status
 
 **Transports:**
 - ✅ HTTP Batch (stateless, pipelining)
