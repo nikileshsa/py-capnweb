@@ -194,31 +194,13 @@ Cross-implementation testing with TypeScript reference validates all combination
 
 Run interop tests: `cd interop && bash run_tests.sh`
 
-## What's New
-
-**v0.6.0** (current):
-- Refactored `ValueCodec` and `CapabilityCodec` architecture
-- Fixed `RpcError` code propagation (errors now preserve original codes)
-- Added `create_stub()` public API for creating stubs from RpcTarget
-- All examples refactored to use public API patterns
-- 744 tests passing, 70% coverage
-- Full bidirectional WebSocket RPC support
-
-**v0.5.0**:
-- WebTransport/HTTP/3 support
-- Actor system example
-
-**v0.4.0**:
-- WebSocket bidirectional RPC
-- Comprehensive documentation
-
-## Acknowledgments
+## Acknowledgments & Key Improvements from Original Fork
 
 This project is based on [py-capnweb](https://github.com/abilian/py-capnweb) by Abilian SAS.
 
 **Why a separate repo?** The original implementation had [several architectural issues](https://github.com/abilian/py-capnweb/issues/5) that required a major refactor to fix properly. Rather than attempting incremental patches, we rebuilt core components from scratch while preserving the overall design.
 
-### Key Improvements
+### Key Improvements from Original
 
 **Architecture:**
 - Refactored `ValueCodec` and `CapabilityCodec` architecture for cleaner wire format handling
