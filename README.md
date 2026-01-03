@@ -212,11 +212,14 @@ Run interop tests: `cd interop && bash run_tests.sh`
 
 ## Acknowledgments
 
-This project is based on [py-capnweb](https://github.com/abilian/py-capnweb) by Abilian SAS, with significant enhancements including:
-- Refactored `ValueCodec` and `CapabilityCodec` architecture
-- Improved error handling and error code propagation
-- Enhanced examples with public API patterns
-- Additional test coverage
+This project is based on [py-capnweb](https://github.com/abilian/py-capnweb) by Abilian SAS.
+
+**Why a separate repo?** The original implementation had [several architectural issues](https://github.com/abilian/py-capnweb/issues/5) that required a major refactor to fix properly. Rather than attempting incremental patches, we rebuilt core components from scratch while preserving the overall design. Key improvements include:
+- Refactored `ValueCodec` and `CapabilityCodec` architecture for cleaner wire format handling
+- Fixed error code propagation (errors now preserve their original codes through the RPC chain)
+- Added `create_stub()` public API for ergonomic capability creation
+- Enhanced all examples to demonstrate proper public API usage
+- Comprehensive test coverage (744 tests)
 
 ## License
 
