@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from capnweb.hooks import StubHook
     from capnweb.stubs import RpcPromise, RpcStub
+    from capnweb.types import RpcTarget
+
+logger = logging.getLogger(__name__)
 
 
 class PayloadSource(Enum):
@@ -64,6 +68,14 @@ class RpcPayload:
     promises: list[tuple[Any, str | int, RpcPromise]] = field(
         default_factory=list
     )  # (parent, property, promise)
+    
+    # For source=RETURN payloads, tracks StubHooks created around RpcTargets
+    # found in the payload at serialization time. This ensures they aren't
+    # disposed before the pipeline ends. Maps RpcTarget/Function -> StubHook.
+    # Matches TypeScript's rpcTargets field.
+    _rpc_targets: dict[RpcTarget | Callable[..., Any], StubHook] | None = field(
+        default=None, repr=False
+    )
 
     @classmethod
     def from_app_params(cls, value: Any) -> RpcPayload:
@@ -109,12 +121,126 @@ class RpcPayload:
         """
         return cls(value, PayloadSource.OWNED)
 
+    @classmethod
+    def from_array(cls, payloads: list[RpcPayload]) -> RpcPayload:
+        """Combine an array of payloads into a single payload.
+
+        Ownership of all stubs is transferred from the inputs to the output.
+        If the output is disposed, the inputs should not be.
+
+        Args:
+            payloads: List of payloads to combine
+
+        Returns:
+            A new RpcPayload containing an array of the payload values
+        """
+        stubs: list[RpcStub] = []
+        promises: list[tuple[Any, str | int, RpcPromise]] = []
+        result_array: list[Any] = []
+
+        for payload in payloads:
+            payload.ensure_deep_copied()
+            stubs.extend(payload.stubs)
+            promises.extend(payload.promises)
+            result_array.append(payload.value)
+
+        result = cls(result_array, PayloadSource.OWNED)
+        result.stubs = stubs
+        result.promises = promises
+        return result
+
+    @classmethod
+    def deep_copy_from(
+        cls,
+        value: Any,
+        old_parent: object | None = None,
+        owner: RpcPayload | None = None,
+    ) -> RpcPayload:
+        """Deep-copy a value, including dup()ing all stubs.
+
+        Args:
+            value: The value to copy
+            old_parent: Parent object (for RpcTarget handling)
+            owner: Owner payload (for RpcTarget handling - used to deduplicate
+                   RpcTarget->StubHook mappings across multiple deep copies)
+
+        Returns:
+            A new RpcPayload with a deep copy of the value
+        """
+        result = cls(None, PayloadSource.OWNED)
+        result.value = result._deep_copy_value(
+            value, old_parent, dup_stubs=True, owner=owner
+        )
+        return result
+
+    def get_hook_for_rpc_target(
+        self,
+        target: RpcTarget | Callable[..., Any],
+        parent: object | None,
+        dup_stubs: bool = True,
+    ) -> StubHook:
+        """Get or create a StubHook for an RpcTarget found in this payload.
+        
+        This method handles the complex ownership semantics for RpcTargets:
+        - For PARAMS: Creates a new TargetStubHook (or calls target.dup() if available)
+        - For RETURN: Deduplicates hooks via _rpc_targets map, handles dup vs take-ownership
+        - For OWNED: Should not contain raw RpcTargets (raises error)
+        
+        Args:
+            target: The RpcTarget or callable to wrap
+            parent: The parent object containing this target
+            dup_stubs: If True, duplicate stubs; if False, take ownership
+            
+        Returns:
+            A StubHook wrapping the target
+            
+        Raises:
+            RuntimeError: If called on an OWNED payload
+        """
+        from capnweb.hooks import TargetStubHook
+        from capnweb.types import RpcTarget
+        
+        if self.source == PayloadSource.PARAMS:
+            if dup_stubs:
+                # For params, we're supposed to dup stubs, but RpcTarget isn't a stub.
+                # If the RpcTarget has a dup() method, call it (like workerd-native stubs).
+                # Otherwise, just wrap it - the caller probably wants us to take ownership.
+                if hasattr(target, 'dup') and callable(getattr(target, 'dup')):
+                    target = target.dup()  # type: ignore[union-attr]
+            return TargetStubHook(target)
+            
+        elif self.source == PayloadSource.RETURN:
+            # For return values, we need to deduplicate RpcTarget->StubHook mappings.
+            # This ensures the same RpcTarget always maps to the same hook.
+            # Use id(target) as key since RpcTarget objects may be unhashable (e.g., mutable dataclasses)
+            if self._rpc_targets is None:
+                self._rpc_targets = {}
+            
+            target_id = id(target)
+            hook = self._rpc_targets.get(target_id)
+            if hook:
+                if dup_stubs:
+                    return hook.dup()
+                else:
+                    # Take ownership - remove from map and return
+                    del self._rpc_targets[target_id]
+                    return hook
+            else:
+                hook = TargetStubHook(target)
+                if dup_stubs:
+                    self._rpc_targets[target_id] = hook
+                    return hook.dup()
+                else:
+                    return hook
+        else:
+            raise RuntimeError("OWNED payload shouldn't contain raw RpcTargets")
+
     def ensure_deep_copied(self) -> None:
         """Ensure this payload owns its data through deep copying if needed.
 
         This is the most critical method for correctness. It:
         1. Deep-copies the value if source is PARAMS (to prevent mutation bugs)
-        2. Takes ownership if source is RETURN (no copy needed)
+        2. Takes ownership if source is RETURN (no copy needed, but must track refs)
         3. Finds and tracks all RpcStub/RpcPromise instances
         4. Transitions source to OWNED
 
@@ -127,67 +253,124 @@ class RpcPayload:
                 return
             case PayloadSource.PARAMS:
                 # Must deep-copy to prevent mutating application data
-                self.value = self._deep_copy_and_track(self.value)
+                # dup_stubs=True means we duplicate any stubs we find
+                self.value = self._deep_copy_value(
+                    self.value, None, dup_stubs=True, owner=self,
+                    parent=self, property_key="value"
+                )
             case PayloadSource.RETURN:
-                # Application gave us ownership, but we still need to track stubs/promises
-                self._track_references(self.value)
+                # Application gave us ownership - we take ownership of stubs (no dup)
+                # and need to track all references
+                self.value = self._deep_copy_value(
+                    self.value, None, dup_stubs=False, owner=self,
+                    parent=self, property_key="value"
+                )
 
         # Now we own this data
         self.source = PayloadSource.OWNED
+        
+        # _rpc_targets should be empty after deep copy (all targets accounted for)
+        if self._rpc_targets and len(self._rpc_targets) > 0:
+            logger.warning("Not all rpcTargets were accounted for in deep-copy")
+        self._rpc_targets = None
 
-    def _deep_copy_and_track(self, obj: Any) -> Any:
+    def _deep_copy_value(
+        self,
+        obj: Any,
+        old_parent: object | None,
+        dup_stubs: bool,
+        owner: RpcPayload | None,
+        parent: Any = None,
+        property_key: str | int | None = None,
+    ) -> Any:
         """Deep copy an object while tracking all RPC references.
+        
+        This matches TypeScript's deepCopy() method in core.ts.
 
         Args:
             obj: The object to copy
+            old_parent: The parent object in the original structure
+            dup_stubs: If True, duplicate stubs; if False, take ownership
+            owner: The owner payload for RpcTarget deduplication
 
         Returns:
             A deep copy with all RPC references tracked
         """
-        # Import here to avoid circular dependency
-        from capnweb.stubs import RpcPromise, RpcStub  # noqa: PLC0415
+        from capnweb.hooks import TargetStubHook
+        from capnweb.stubs import RpcPromise, RpcStub
+        from capnweb.types import RpcTarget
 
-        # Handle RpcStub and RpcPromise specially - don't copy them,
-        # but track them and duplicate their hooks
-        match obj:
-            case RpcStub():
-                # Create a duplicate (shares the hook, increments refcount)
+        # Handle primitives - immutable, no need to copy
+        if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
+            return obj
 
-                dup: StubHook = obj._hook.dup()  # type: ignore[assignment]
-                new_stub = RpcStub(dup)
-                self.stubs.append(new_stub)
-                return new_stub
+        # Handle RpcStub
+        if isinstance(obj, RpcStub):
+            if dup_stubs:
+                hook = obj._hook.dup()
+            else:
+                # Take ownership - get hook without incrementing refcount
+                hook = obj._hook
+                # Prevent the original stub from disposing the hook
+                obj._hook = None  # type: ignore[assignment]
+            new_stub = RpcStub(hook)
+            self.stubs.append(new_stub)
+            return new_stub
 
-            case RpcPromise():
-                # Create a duplicate (shares the hook, increments refcount)
+        # Handle RpcPromise
+        if isinstance(obj, RpcPromise):
+            if dup_stubs:
+                hook = obj._hook.dup()
+            else:
+                hook = obj._hook
+                obj._hook = None  # type: ignore[assignment]
+            new_promise = RpcPromise(hook)
+            # Track promise location for later substitution (matches TypeScript)
+            self.promises.append((parent, property_key, new_promise))
+            return new_promise
 
-                dup: StubHook = obj._hook.dup()  # type: ignore[assignment]
-                new_promise = RpcPromise(dup)
-                # Note: parent and property tracking would happen at the container level
-                return new_promise
+        # Handle lists
+        if isinstance(obj, list):
+            result: list[Any] = []
+            for i, item in enumerate(obj):
+                result.append(
+                    self._deep_copy_value(item, obj, dup_stubs, owner, result, i)
+                )
+            return result
 
-            case None | bool() | int() | float() | str() | bytes():
-                # Handle primitive types - return as-is (immutable)
-                return obj
+        # Handle dicts
+        if isinstance(obj, dict):
+            result_dict: dict[str, Any] = {}
+            for key, value in obj.items():
+                result_dict[key] = self._deep_copy_value(value, obj, dup_stubs, owner, result_dict, key)
+            return result_dict
 
-            case list():
-                # Handle lists
-                return [self._deep_copy_and_track(item) for item in obj]
+        # Handle RpcTarget - wrap in a stub
+        if isinstance(obj, RpcTarget):
+            if owner:
+                hook = owner.get_hook_for_rpc_target(obj, old_parent, dup_stubs)
+            else:
+                hook = TargetStubHook(obj)
+            new_stub = RpcStub(hook)
+            self.stubs.append(new_stub)
+            return new_stub
 
-            case dict():
-                # Handle dicts
-                return {
-                    key: self._deep_copy_and_track(value) for key, value in obj.items()
-                }
+        # Handle callable (functions) - wrap in a stub like RpcTarget
+        if callable(obj) and not isinstance(obj, type):
+            if owner:
+                hook = owner.get_hook_for_rpc_target(obj, old_parent, dup_stubs)
+            else:
+                hook = TargetStubHook(obj)
+            new_stub = RpcStub(hook)
+            self.stubs.append(new_stub)
+            return new_stub
 
-            case _:
-                # For other types, try to copy using copy module
-
-                try:
-                    return copy.deepcopy(obj)
-                except Exception:
-                    # If deepcopy fails, return as-is and hope it's immutable
-                    return obj
+        # For other types, try to copy using copy module
+        try:
+            return copy.deepcopy(obj)
+        except (TypeError, AttributeError, RecursionError) as e:
+            logger.debug(f"deepcopy failed for {type(obj).__name__}: {e}")
+            return obj
 
     def _track_references(
         self, obj: Any, parent: Any = None, key: str | int | None = None
@@ -199,7 +382,7 @@ class RpcPayload:
             parent: The parent container (for promise tracking)
             key: The key/index in parent (for promise tracking)
         """
-        from capnweb.stubs import RpcPromise, RpcStub  # noqa: PLC0415
+        from capnweb.stubs import RpcPromise, RpcStub
 
         match obj:
             case RpcStub():

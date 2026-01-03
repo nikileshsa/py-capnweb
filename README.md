@@ -47,7 +47,8 @@ pip install capnweb[webtransport]
 
 **Server:**
 ```python
-from capnweb.server import Server, ServerConfig
+import asyncio
+from capnweb.ws_session import WebSocketRpcServer
 from capnweb.types import RpcTarget
 from capnweb.error import RpcError
 
@@ -62,46 +63,45 @@ class Calculator(RpcTarget):
         raise RpcError.not_found("No properties")
 
 async def main():
-    server = Server(ServerConfig(host="127.0.0.1", port=8080))
-    server.register_capability(0, Calculator())
+    server = WebSocketRpcServer(Calculator(), host="127.0.0.1", port=8080)
     await server.start()
     await asyncio.Event().wait()  # Run forever
+
+asyncio.run(main())
 ```
 
 **Client:**
 ```python
-from capnweb.client import Client, ClientConfig
+import asyncio
+from capnweb.unified_client import UnifiedClient, UnifiedClientConfig
 
-async with Client(ClientConfig(url="http://localhost:8080/rpc/batch")) as client:
-    result = await client.call(0, "add", [5, 3])
-    print(f"5 + 3 = {result}")  # Output: 8
+async def main():
+    config = UnifiedClientConfig(url="ws://localhost:8080/rpc")
+    async with UnifiedClient(config) as client:
+        result = await client.call(0, "add", [5, 3])
+        print(f"5 + 3 = {result}")  # Output: 8
+
+asyncio.run(main())
 ```
 
-**Promise Pipelining** (advanced):
+**Capability Passing** (bidirectional RPC):
 ```python
-async with Client(config) as client:
-    batch = client.pipeline()
-
-    # These calls are batched into a single HTTP request!
-    user = batch.call(0, "getUser", ["alice"])
-    profile = batch.call(0, "getProfile", [user.id])  # Property access on promise!
-    posts = batch.call(0, "getPosts", [user.id])
-
-    u, p, posts_data = await asyncio.gather(user, profile, posts)
+# Server returns a capability, client can call methods on it
+account = await client.call(0, "createAccount", [1000.0])
+balance = await client.call(account._hook.import_id, "getBalance", [])
 ```
 
-## Current Status (v0.4.0)
+## Current Status (v0.5.0)
 
 **Transports:**
-- ✅ HTTP Batch
-- ⚠️ WebSocket (partial support - client→server RPC only, bidirectional RPC in progress)
+- ✅ WebSocket (full bidirectional RPC with capability passing)
 - ✅ WebTransport/HTTP/3 (requires aioquic)
 
 **Protocol Features:**
 - ✅ Wire protocol (all message types)
 - ✅ Promise pipelining
 - ✅ Expression evaluation (including `.map()`)
-- ⚠️ Bidirectional RPC (HTTP Batch only, WebSocket support in progress)
+- ✅ Bidirectional RPC (full capability passing over WebSocket)
 - ✅ Resume tokens
 - ✅ Reference counting
 - ✅ Structured errors
@@ -209,6 +209,14 @@ See [CHANGES.md](CHANGES.md) for detailed release notes.
 - Promise pipelining support
 - 100% TypeScript interoperability
 - Array escaping for compatibility
+
+## Acknowledgments
+
+This project is based on [py-capnweb](https://github.com/abilian/py-capnweb) by Abilian SAS, with significant enhancements including:
+- Refactored `ValueCodec` and `CapabilityCodec` architecture
+- Improved error handling and error code propagation
+- Enhanced examples with public API patterns
+- Additional test coverage
 
 ## License
 

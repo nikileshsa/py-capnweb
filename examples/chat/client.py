@@ -7,22 +7,17 @@ This example demonstrates:
 - Real-time message updates
 
 Run:
-    python examples/chat/client.py
+    uv run python examples/chat/client.py
 """
 
 import asyncio
-import logging
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-from capnweb.client import Client, ClientConfig
-from capnweb.error import RpcError
-from capnweb.types import RpcTarget
-
-logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger(__name__)
+from capnweb import RpcError, RpcTarget, RpcStub, BidirectionalSession, create_stub
+from capnweb.ws_transport import WebSocketClientTransport
 
 
 @dataclass
@@ -37,20 +32,14 @@ class ChatClient(RpcTarget):
             case "onMessage":
                 return await self._on_message(args[0])
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
+    async def get_property(self, name: str) -> Any:
         """Handle property access."""
-        msg = f"Property {property} not found"
-        raise RpcError.not_found(msg)
+        raise RpcError.not_found(f"Property '{name}' not found")
 
     async def _on_message(self, message: dict[str, str]) -> None:
-        """Receive a message from the server.
-
-        Args:
-            message: Dictionary with 'username', 'text', and 'type' keys
-        """
+        """Receive a message from the server."""
         msg_type = message.get("type", "chat")
         username = message.get("username", "Unknown")
         text = message.get("text", "")
@@ -72,7 +61,7 @@ async def read_input() -> str:
     return await loop.run_in_executor(None, sys.stdin.readline)
 
 
-async def main():  # noqa: C901
+async def main() -> None:
     """Run the interactive chat client."""
     print("=== Cap'n Web Chat Client ===")
     print()
@@ -85,32 +74,34 @@ async def main():  # noqa: C901
         print("Username cannot be empty!")
         return
 
-    # Connect to server
-    # Use WebSocket for persistent connection
-    config = ClientConfig(url="ws://127.0.0.1:8080/rpc/ws", timeout=60.0)
-
     print(f"\nConnecting to chat server as '{username}'...")
 
     try:
-        async with Client(config) as client:
-            # Create client capability
-            client_cap = ChatClient(username)
+        # Connect via WebSocket using WebSocketClientTransport
+        transport = WebSocketClientTransport("ws://127.0.0.1:8080/rpc/ws")
+        await transport.connect()
+        
+        client_callback = ChatClient(username)
+        session = BidirectionalSession(transport, client_callback)
+        session.start()
 
-            # Register our capability with the session
-            # The server will call our onMessage method
-            client_stub = client.create_stub(client_cap)
+        try:
+            # Get server stub (wrap ImportHook in RpcStub for ergonomic API)
+            server = RpcStub(session.get_main_stub())
+
+            # Create a stub for our callback capability (public API)
+            callback_stub = create_stub(client_callback)
 
             # Join the chat room
             try:
-                welcome = await client.call(0, "join", [username, client_stub])
-                print(f"\n\033[92m{welcome['message']}\033[0m")
-                print(
-                    f"Connected users ({welcome['userCount']}): {', '.join(welcome['users'])}"
+                welcome_data = await asyncio.wait_for(
+                    server.join(username, callback_stub), timeout=5.0
                 )
+
+                print(f"\n\033[92m{welcome_data['message']}\033[0m")
+                print(f"Connected users ({welcome_data['userCount']}): {', '.join(welcome_data['users'])}")
                 print("\nType messages and press Enter to send.")
-                print(
-                    "Type '/quit' to exit, '/users' to list users, '/help' for commands"
-                )
+                print("Type '/quit' to exit, '/users' to list users, '/help' for commands")
                 print()
 
             except RpcError as e:
@@ -129,11 +120,11 @@ async def main():  # noqa: C901
                     # Handle commands
                     if message == "/quit":
                         print("\nLeaving chat...")
-                        await client.call(0, "leave", [username])
+                        await server.leave(username)
                         break
 
                     if message == "/users":
-                        users = await client.call(0, "listUsers", [])
+                        users = await server.listUsers()
                         print(f"\n\033[96mConnected users: {', '.join(users)}\033[0m\n")
 
                     elif message == "/help":
@@ -149,20 +140,22 @@ async def main():  # noqa: C901
                     else:
                         # Send regular message
                         try:
-                            await client.call(0, "sendMessage", [username, message])
+                            await server.sendMessage(username, message)
                         except RpcError as e:
-                            print(
-                                f"\n\033[91mError sending message: {e.message}\033[0m\n"
-                            )
+                            print(f"\n\033[91mError sending message: {e.message}\033[0m\n")
 
             except KeyboardInterrupt:
                 print("\n\nLeaving chat...")
                 with suppress(Exception):
-                    await client.call(0, "leave", [username])
+                    await server.leave(username)
+
+        finally:
+            await session.stop()
+            await transport.close()
 
     except Exception as e:
         print(f"\n\033[91mConnection error: {e}\033[0m")
-        print("Make sure the server is running: python examples/chat/server.py")
+        print("Make sure the server is running: uv run python examples/chat/server.py")
 
 
 if __name__ == "__main__":

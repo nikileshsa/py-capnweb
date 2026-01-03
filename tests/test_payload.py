@@ -5,8 +5,9 @@ from dataclasses import dataclass
 
 from capnweb.hooks import PayloadStubHook
 from capnweb.payload import PayloadSource, RpcPayload
-from capnweb.session import RpcSession
+from capnweb.rpc_session import BidirectionalSession
 from capnweb.stubs import RpcPromise, RpcStub
+from tests.conftest import create_transport_pair
 
 
 class TestPayloadCreation:
@@ -74,14 +75,16 @@ class TestPayloadEnsureDeepCopied:
         assert original["data"] == [1, 2, 3]
 
     def test_return_payload_ownership_transfer(self):
-        """Test that RETURN payloads transfer ownership without copying."""
+        """Test that RETURN payloads are deep copied (matching TypeScript behavior)."""
         original = {"data": "test"}
         payload = RpcPayload.from_app_return(original)
 
         payload.ensure_deep_copied()
 
-        # Should be the same object (ownership transferred)
-        assert payload.value is original
+        # TypeScript always deep copies in ensureDeepCopied(), even for RETURN
+        # The value is a new object with the same content
+        assert payload.value == original
+        assert payload.value is not original  # Deep copied
         assert payload.source == PayloadSource.OWNED
 
     def test_ensure_deep_copied_idempotent(self):
@@ -118,7 +121,8 @@ class TestPayloadDeepCopyTracking:
 
     def test_deep_copy_with_promise(self):
         """Test deep copying payload containing RpcPromise."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         hook = session.create_promise_hook(1)
         promise = RpcPromise(hook)
 
@@ -219,11 +223,14 @@ class TestPayloadTrackReferences:
 
         # Should have tracked the stub
         assert len(payload.stubs) == 1
-        assert payload.stubs[0] is stub
+        # The tracked stub is the NEW stub in the deep-copied value
+        # (not the original - deep copy creates new objects)
+        assert payload.stubs[0] is payload.value["stub"]
 
     def test_track_promise_in_return(self):
         """Test tracking promises in RETURN payloads."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         hook = session.create_promise_hook(1)
         promise = RpcPromise(hook)
 
@@ -233,12 +240,15 @@ class TestPayloadTrackReferences:
         # Should have tracked the promise
         assert len(payload.promises) == 1
         _parent, key, tracked_promise = payload.promises[0]
-        assert tracked_promise is promise
+        # The tracked promise is the NEW promise in the deep-copied value
+        # (not the original - deep copy creates new objects)
+        assert tracked_promise is payload.value["promise"]
         assert key == "promise"
 
     def test_track_promise_in_list(self):
         """Test tracking promises in lists."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         hook = session.create_promise_hook(1)
         promise = RpcPromise(hook)
 
@@ -248,12 +258,14 @@ class TestPayloadTrackReferences:
         # Should have tracked the promise
         assert len(payload.promises) == 1
         _parent, key, tracked_promise = payload.promises[0]
-        assert tracked_promise is promise
+        # The tracked promise is the NEW promise in the deep-copied value
+        assert tracked_promise is payload.value[0]
         assert key == 0  # Index in list
 
     def test_track_nested_stubs_and_promises(self):
         """Test tracking nested stubs and promises."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
 
         stub_hook = PayloadStubHook(RpcPayload.owned("stub_data"))
         stub = RpcStub(stub_hook)
@@ -292,7 +304,8 @@ class TestPayloadDispose:
 
     def test_dispose_payload_with_promises(self):
         """Test that disposing payload disposes tracked promises."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         hook = session.create_promise_hook(1)
         promise = RpcPromise(hook)
 

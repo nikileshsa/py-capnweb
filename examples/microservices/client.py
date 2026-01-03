@@ -1,186 +1,136 @@
-"""Microservices demo client - Interacts with the API gateway.
+"""Microservices Client - Demonstrates capability-based security.
 
-This example demonstrates:
-- Multi-service architecture with API gateway
-- Authentication flow across services
-- Capability-based authorization
-- Service mesh communication
+This client connects via WebSocket to demonstrate capability passing:
+- Login returns a token
+- getUserByToken returns a User CAPABILITY (not just data!)
+- The capability is passed to createOrder/listOrders for authorization
+- Order Service calls methods on the User capability
 
-Run (after starting all services):
-    python examples/microservices/client.py
+Run (after starting server.py):
+    uv run python examples/microservices/client.py
 """
 
 import asyncio
-import logging
+from typing import Any
 
-from capnweb.client import Client, ClientConfig
 from capnweb.error import RpcError
+from capnweb.rpc_session import BidirectionalSession
+from capnweb.stubs import RpcStub
+from capnweb.types import RpcTarget
+from capnweb.ws_transport import WebSocketClientTransport
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+SERVER_URL = "ws://127.0.0.1:8080/rpc/ws"
 
 
-async def main():  # noqa: C901
-    """Run the microservices demo client."""
-    # Connect to API Gateway
-    config = ClientConfig(url="http://127.0.0.1:8080/rpc/batch")
+class DummyTarget(RpcTarget):
+    """Dummy target for client side."""
+    async def call(self, method: str, args: list[Any]) -> Any:
+        raise RpcError.not_found(f"Method '{method}' not found")
+    async def get_property(self, name: str) -> Any:
+        raise RpcError.not_found(f"Property '{name}' not found")
 
-    print("=== Microservices Demo ===\n")
 
-    async with Client(config) as client:
-        # ============================================================
-        # 1. Login as regular user (Bob)
-        # ============================================================
+async def main() -> None:
+    """Run the microservices demo."""
+    print("=== Microservices Demo (Capability-Based Security) ===")
+    print()
+
+    # Connect via WebSocket
+    transport = WebSocketClientTransport(SERVER_URL)
+    await transport.connect()
+    
+    session = BidirectionalSession(transport, DummyTarget())
+    session.start()
+    
+    # Get the gateway stub
+    gateway = RpcStub(session.get_main_stub())
+
+    try:
+        # 1. Login as Bob (regular user)
         print("1. Login as Bob (regular user)")
-        try:
-            login_result = await client.call(0, "login", ["bob", "password"])
-            bob_token = login_result["token"]
-            print(
-                f"   ✓ Logged in as {login_result['username']} (role: {login_result['role']})"
-            )
-            print(f"   Token: {bob_token}\n")
-        except RpcError as e:
-            print(f"   ✗ Login failed: {e.message}\n")
-            return
+        bob_login = await gateway.login("bob", "bob123")
+        bob_token = bob_login["token"]
+        print(f"   ✓ Logged in as {bob_login['username']} (role: {bob_login['role']})")
 
-        # ============================================================
-        # 2. Get user profile
-        # ============================================================
-        print("2. Get Bob's profile")
-        try:
-            profile = await client.call(0, "getUserProfile", [bob_token])
-            print(f"   User ID: {profile['userId']}")
-            print(f"   Username: {profile['username']}")
-            print(f"   Email: {profile['email']}")
-            print(f"   Role: {profile['role']}\n")
-        except RpcError as e:
-            print(f"   ✗ Get profile failed: {e.message}\n")
+        # 2. Get User CAPABILITY (not just profile data!)
+        print("\n2. Get User CAPABILITY from token")
+        bob_cap = await gateway.getUserByToken(bob_token)
+        print(f"   ✓ Got User capability: {type(bob_cap).__name__}")
+        
+        # Verify we can call methods on the capability
+        user_id = await bob_cap.getId()
+        username = await bob_cap.getUsername()
+        print(f"   ✓ Capability works - User ID: {user_id}, Username: {username}")
 
-        # ============================================================
-        # 3. List all users
-        # ============================================================
-        print("3. List all users")
-        try:
-            users = await client.call(0, "listUsers", [bob_token])
-            print(f"   Found {len(users)} users:")
-            for user in users:
-                print(
-                    f"     - {user['username']} (id: {user['id']}, role: {user['role']})"
-                )
-            print()
-        except RpcError as e:
-            print(f"   ✗ List users failed: {e.message}\n")
-
-        # ============================================================
-        # 4. Create an order as Bob
-        # ============================================================
-        print("4. Create an order as Bob")
+        # 3. Create an order using the User CAPABILITY
+        print("\n3. Create order with User capability (capability-based auth)")
         items = [
             {"name": "Laptop", "price": 999.99, "quantity": 1},
             {"name": "Mouse", "price": 29.99, "quantity": 2},
         ]
-        try:
-            order_result = await client.call(0, "createOrder", [bob_token, items])
-            bob_order_id = order_result["orderId"]
-            print(f"   ✓ Order created: {bob_order_id}")
-            print(f"   Total: ${order_result['total']:.2f}")
-            print(f"   Status: {order_result['status']}")
-            print(f"   Items: {len(order_result['items'])}\n")
-        except RpcError as e:
-            print(f"   ✗ Create order failed: {e.message}\n")
-            return
+        # Pass the capability to createOrder - server will call methods on it!
+        order = await gateway.createOrder(bob_cap, items)
+        bob_order_id = order["orderId"]
+        print(f"   ✓ Order created: {bob_order_id}")
+        print(f"   Total: ${order['total']:.2f}")
+        print(f"   Status: {order['status']}")
 
-        # ============================================================
-        # 5. List Bob's orders
-        # ============================================================
-        print("5. List Bob's orders")
-        try:
-            orders = await client.call(0, "listOrders", [bob_token])
-            print(f"   Found {len(orders)} order(s):")
-            for order in orders:
-                print(
-                    f"     - {order['orderId']}: ${order['total']:.2f} ({order['status']})"
-                )
-            print()
-        except RpcError as e:
-            print(f"   ✗ List orders failed: {e.message}\n")
+        # 4. List orders using the User CAPABILITY
+        print("\n4. List orders with User capability")
+        orders = await gateway.listOrders(bob_cap)
+        print(f"   Found {len(orders)} order(s):")
+        for o in orders:
+            print(f"     - {o['orderId']}: ${o['total']:.2f} ({o['status']})")
 
-        # ============================================================
-        # 6. Try to cancel order as Bob (should fail - no permission)
-        # ============================================================
-        print("6. Try to cancel order as Bob (should fail)")
+        # 5. Try to cancel order as Bob (should fail - no permission)
+        print("\n5. Try to cancel order as Bob (should fail)")
         try:
-            await client.call(0, "cancelOrder", [bob_token, bob_order_id])
-            print("   ✗ Unexpected success - Bob shouldn't be able to cancel orders!\n")
+            await gateway.cancelOrder(bob_cap, bob_order_id)
+            print("   ✗ Unexpected success!")
         except RpcError as e:
-            print(f"   ✓ Expected failure: {e.message}\n")
+            print(f"   ✓ Expected failure: {e.message}")
 
-        # ============================================================
-        # 7. Login as admin (Alice)
-        # ============================================================
-        print("7. Login as Alice (admin)")
-        try:
-            login_result = await client.call(0, "login", ["alice", "password"])
-            alice_token = login_result["token"]
-            print(
-                f"   ✓ Logged in as {login_result['username']} (role: {login_result['role']})"
-            )
-            print(f"   Token: {alice_token}\n")
-        except RpcError as e:
-            print(f"   ✗ Login failed: {e.message}\n")
-            return
+        # 6. Login as Alice (admin) and get her capability
+        print("\n6. Login as Alice (admin)")
+        alice_login = await gateway.login("alice", "alice123")
+        alice_cap = await gateway.getUserByToken(alice_login["token"])
+        print(f"   ✓ Logged in as {alice_login['username']} (role: {alice_login['role']})")
+        print(f"   ✓ Got Alice's User capability")
 
-        # ============================================================
-        # 8. Alice creates an order
-        # ============================================================
-        print("8. Create an order as Alice")
-        items = [
-            {"name": "Server", "price": 4999.99, "quantity": 1},
-        ]
-        try:
-            order_result = await client.call(0, "createOrder", [alice_token, items])
-            alice_order_id = order_result["orderId"]
-            print(f"   ✓ Order created: {alice_order_id}")
-            print(f"   Total: ${order_result['total']:.2f}\n")
-        except RpcError as e:
-            print(f"   ✗ Create order failed: {e.message}\n")
+        # 7. Alice cancels Bob's order (should succeed - admin)
+        print("\n7. Alice cancels Bob's order (admin has permission)")
+        result = await gateway.cancelOrder(alice_cap, bob_order_id)
+        print(f"   ✓ Order cancelled: {result['orderId']}")
+        print(f"   Status: {result['status']}")
 
-        # ============================================================
-        # 9. Alice cancels Bob's order (should succeed - admin permission)
-        # ============================================================
-        print("9. Alice cancels Bob's order (should succeed)")
-        try:
-            result = await client.call(0, "cancelOrder", [alice_token, bob_order_id])
-            print(f"   ✓ Order cancelled: {result['orderId']}")
-            print(f"   Status: {result['status']}\n")
-        except RpcError as e:
-            print(f"   ✗ Cancel failed: {e.message}\n")
+        # 8. Verify Bob's order was cancelled
+        print("\n8. Verify Bob's order was cancelled")
+        orders = await gateway.listOrders(bob_cap)
+        for o in orders:
+            if o["orderId"] == bob_order_id:
+                print(f"   Order {bob_order_id} status: {o['status']}")
+                if o["status"] == "cancelled":
+                    print("   ✓ Order successfully cancelled by admin")
 
-        # ============================================================
-        # 10. Verify order was cancelled
-        # ============================================================
-        print("10. Verify Bob's order was cancelled")
-        try:
-            orders = await client.call(0, "listOrders", [bob_token])
-            for order in orders:
-                if order["orderId"] == bob_order_id:
-                    print(f"   Order {bob_order_id} status: {order['status']}")
-                    if order["status"] == "cancelled":
-                        print("   ✓ Order successfully cancelled\n")
-                    else:
-                        print(f"   ✗ Expected cancelled, got {order['status']}\n")
-                    break
-        except RpcError as e:
-            print(f"   ✗ List orders failed: {e.message}\n")
+        print("\n=== Demo Complete ===")
+        print()
+        print("This demo showed CAPABILITY-BASED SECURITY:")
+        print("  • getUserByToken returns a User CAPABILITY (not just data)")
+        print("  • Capabilities are passed to createOrder/listOrders/cancelOrder")
+        print("  • Server calls methods on the capability for authorization")
+        print("  • Permissions are enforced by the capability itself")
+        print("  • No token validation needed - the capability IS the authorization")
 
-        print("=== Demo Complete ===")
-        print("\nThis demo showed:")
-        print("  • API Gateway routing requests to backend services")
-        print("  • User authentication via User Service")
-        print("  • Cross-service capability passing (User → Order Service)")
-        print("  • Permission-based access control (admin can cancel, user cannot)")
-        print("  • Service mesh architecture with Cap'n Web")
+    finally:
+        await session.stop()
+        await transport.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        print()
+        print("Make sure the server is running:")
+        print("  uv run python examples/microservices/server.py")

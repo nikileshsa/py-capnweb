@@ -18,3 +18,4 @@ node_modules
 # Test cruft
 .coverage
 .hypothesis
+scratch-docs/

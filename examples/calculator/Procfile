@@ -1,2 +1,0 @@
-server: python server.py
-client: sleep 3 && python client.py

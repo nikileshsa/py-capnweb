@@ -1,31 +1,69 @@
-Batch + Pipelining (Single Round Trip)
+# Batch Pipelining Example
 
-This example shows how to issue a sequence of dependent RPC calls that all execute on the server in a single HTTP round trip using batching and promise pipelining.
+Demonstrates HTTP batch RPC with multiple calls in a single request.
 
-What it does
+## Features
 
-- Authenticates a user.
-- Uses the returned user ID (without awaiting) to fetch the profile and notifications.
-- Awaits all results together. Even though there are multiple calls and dependencies, they travel in one request and one response.
+- HTTP batch transport for efficient RPC
+- Multiple calls in a single HTTP request
+- Simulated network latency to show batching benefits
+- Comparison of batched vs sequential calls
 
-Run locally (Python 3.11+)
+## Running
 
-1) Install dependencies:
-   uv pip install -e .
+### Terminal 1 - Start the server
 
-2) Start the server:
-   python examples/batch-pipelining/server.py
+```bash
+cd py-capnweb
+uv run python examples/batch-pipelining/server.py
+```
 
-3) In a separate terminal, run the client:
-   python examples/batch-pipelining/client.py
+### Terminal 2 - Run the client
 
-Files
+```bash
+cd py-capnweb
+uv run python examples/batch-pipelining/client.py
+```
 
-- server.py: Minimal aiohttp server using Cap'n Web Python server.
-- client.py: Client demonstrating batching concept (full pipelining not yet implemented).
-- server-node.mjs: Original Node.js server (reference)
-- client.mjs: Original Node.js client (reference)
+## Architecture
 
-Why this matters
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Client                               │
+│                                                              │
+│  1. authenticate(token) ─────┐                               │
+│  2. getUserProfile(userId) ──┼── Single HTTP POST ──────────▶│
+│  3. getNotifications(userId)─┘                               │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                         Server                               │
+│                                                              │
+│  API:                                                        │
+│  - authenticate(token) → {id, name}                          │
+│  - getUserProfile(userId) → {id, bio}                        │
+│  - getNotifications(userId) → [...]                          │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- With normal HTTP or naive GraphQL usage, each dependent call often needs another round trip. Here, dependent calls are constructed locally, sent once, and executed on the server with results streamed back — minimizing latency dramatically.
+## Batching Benefits
+
+Without batching (3 sequential HTTP requests):
+```
+Request 1: authenticate()     → 80ms server + RTT
+Request 2: getUserProfile()   → 120ms server + RTT  
+Request 3: getNotifications() → 120ms server + RTT
+Total: ~320ms server + 3×RTT
+```
+
+With batching (1 HTTP request with 3 calls):
+```
+Request 1: [authenticate, getUserProfile, getNotifications]
+           → 320ms server (parallel) + 1×RTT
+Total: ~320ms server + 1×RTT
+```
+
+The batching approach saves 2 round trips!

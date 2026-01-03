@@ -1,40 +1,38 @@
-"""User Service - Manages user data and authentication.
-
-This microservice demonstrates:
-- Service-to-service RPC
-- Capability passing between services
-- Cross-service authentication
-- Resource management
+"""User Service - Manages users and authentication.
 
 Run:
-    python examples/microservices/user_service.py
+    uv run python examples/microservices/user_service.py
 """
 
 import asyncio
-import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
+from aiohttp import web
+
+from capnweb.batch import aiohttp_batch_rpc_handler
 from capnweb.error import RpcError
-from capnweb.server import Server, ServerConfig
 from capnweb.types import RpcTarget
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# In-memory user database
+USERS_DB = {
+    "alice": {"id": "user1", "username": "alice", "password": "alice123", "email": "alice@example.com", "role": "admin"},
+    "bob": {"id": "user2", "username": "bob", "password": "bob123", "email": "bob@example.com", "role": "user"},
+    "charlie": {"id": "user3", "username": "charlie", "password": "charlie123", "email": "charlie@example.com", "role": "user"},
+}
 
 
 @dataclass
 class User(RpcTarget):
-    """Represents a single user - a capability that can be passed between services."""
+    """User capability - represents a logged-in user."""
 
     user_id: str
     username: str
     email: str
-    role: str = "user"
-    metadata: dict[str, Any] = field(default_factory=dict)
+    role: str
 
     async def call(self, method: str, args: list[Any]) -> Any:
-        """Handle method calls on the user."""
+        """Handle RPC calls."""
         match method:
             case "getId":
                 return self.user_id
@@ -45,18 +43,13 @@ class User(RpcTarget):
             case "getRole":
                 return self.role
             case "hasPermission":
-                return self._has_permission(args[0])
-            case "setMetadata":
-                return self._set_metadata(args[0], args[1])
-            case "getMetadata":
-                return self._get_metadata(args[0])
+                return self._has_permission(args[0] if args else "")
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
+    async def get_property(self, name: str) -> Any:
         """Handle property access."""
-        match property:
+        match name:
             case "id":
                 return self.user_id
             case "username":
@@ -66,48 +59,29 @@ class User(RpcTarget):
             case "role":
                 return self.role
             case _:
-                msg = f"Property {property} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Property '{name}' not found")
 
     def _has_permission(self, permission: str) -> bool:
-        """Check if user has a specific permission."""
-        # Simple role-based access control
+        """Check if user has a permission."""
+        admin_permissions = {"user.create", "user.delete", "order.cancel", "system.admin"}
         user_permissions = {"order.create", "order.view", "profile.edit"}
 
         if self.role == "admin":
             return True  # Admin has all permissions
-        if self.role == "user":
+        elif self.role == "user":
             return permission in user_permissions
         return False
 
-    def _set_metadata(self, key: str, value: Any) -> dict[str, str]:
-        """Set user metadata."""
-        self.metadata[key] = value
-        return {"status": "ok"}
-
-    def _get_metadata(self, key: str) -> Any:
-        """Get user metadata."""
-        if key not in self.metadata:
-            msg = f"Metadata key {key} not found"
-            raise RpcError.not_found(msg)
-        return self.metadata[key]
-
 
 class UserService(RpcTarget):
-    """User service - manages user accounts and authentication."""
+    """User Service - manages users and authentication."""
 
-    def __init__(self):
-        # In-memory user database
-        self.users: dict[str, User] = {
-            "user1": User("user1", "alice", "alice@example.com", "admin"),
-            "user2": User("user2", "bob", "bob@example.com", "user"),
-            "user3": User("user3", "charlie", "charlie@example.com", "user"),
-        }
-        # Session tokens
+    def __init__(self) -> None:
         self.sessions: dict[str, User] = {}
+        self.token_counter = 0
 
     async def call(self, method: str, args: list[Any]) -> Any:
-        """Handle RPC method calls."""
+        """Handle RPC calls."""
         match method:
             case "authenticate":
                 return await self._authenticate(args[0], args[1])
@@ -115,88 +89,76 @@ class UserService(RpcTarget):
                 return self._get_user(args[0])
             case "getUserByToken":
                 return self._get_user_by_token(args[0])
-            case "getUserDataByToken":
-                return self._get_user_data_by_token(args[0])
-            case "checkPermission":
-                return self._check_permission(args[0], args[1])
+            case "getUserProfile":
+                return self._get_user_profile(args[0])
+            case "validateToken":
+                return self._validate_token(args[0], args[1] if len(args) > 1 else None)
             case "listUsers":
                 return self._list_users()
-            case "createUser":
-                return self._create_user(args[0], args[1], args[2])
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
+    async def get_property(self, name: str) -> Any:
         """Handle property access."""
-        match property:
-            case "userCount":
-                return len(self.users)
-            case "sessionCount":
-                return len(self.sessions)
-            case _:
-                msg = f"Property {property} not found"
-                raise RpcError.not_found(msg)
+        raise RpcError.not_found(f"Property '{name}' not found")
 
     async def _authenticate(self, username: str, password: str) -> dict[str, Any]:
-        """Authenticate a user and return a session token.
+        """Authenticate a user and return session info."""
+        user_data = USERS_DB.get(username)
+        if not user_data or user_data["password"] != password:
+            raise RpcError.bad_request("Invalid username or password")
 
-        In a real system, this would verify password hashes.
-        For this example, we just check username exists.
-        """
-        # Find user by username
-        user = None
-        for u in self.users.values():
-            if u.username == username:
-                user = u
-                break
+        # Create session token
+        self.token_counter += 1
+        token = f"token_{username}_{self.token_counter}"
 
-        if user is None:
-            msg = "Invalid credentials"
-            raise RpcError.permission_denied(msg)
-
-        # Create session token (in real system, use secure random tokens)
-        session_token = f"token_{username}_{len(self.sessions)}"
-        self.sessions[session_token] = user
-
-        logger.info("User %s authenticated, token: %s", username, session_token)
+        # Create User capability
+        user = User(
+            user_id=user_data["id"],
+            username=user_data["username"],
+            email=user_data["email"],
+            role=user_data["role"],
+        )
+        self.sessions[token] = user
 
         return {
-            "token": session_token,
-            "userId": user.user_id,
-            "username": user.username,
-            "role": user.role,
+            "token": token,
+            "userId": user_data["id"],
+            "username": user_data["username"],
+            "role": user_data["role"],
         }
 
     def _get_user(self, user_id: str) -> User:
-        """Get a user by ID.
-
-        Returns a User capability that can be passed to other services.
-        """
-        if user_id not in self.users:
-            msg = f"User {user_id} not found"
-            raise RpcError.not_found(msg)
-
-        return self.users[user_id]
+        """Get a User capability by ID."""
+        for user_data in USERS_DB.values():
+            if user_data["id"] == user_id:
+                return User(
+                    user_id=user_data["id"],
+                    username=user_data["username"],
+                    email=user_data["email"],
+                    role=user_data["role"],
+                )
+        raise RpcError.not_found(f"User '{user_id}' not found")
 
     def _get_user_by_token(self, token: str) -> User:
-        """Get a user by session token.
+        """Get a User capability by session token."""
+        user = self.sessions.get(token)
+        if not user:
+            raise RpcError.bad_request("Invalid or expired token")
+        return user
 
-        Returns a User capability.
-        """
-        if token not in self.sessions:
-            msg = "Invalid or expired token"
-            raise RpcError.permission_denied(msg)
+    def _list_users(self) -> list[dict[str, str]]:
+        """List all users (without sensitive data)."""
+        return [
+            {"id": u["id"], "username": u["username"], "role": u["role"]}
+            for u in USERS_DB.values()
+        ]
 
-        return self.sessions[token]
-
-    def _get_user_data_by_token(self, token: str) -> dict[str, str]:
-        """Get user data by session token (returns plain data, not capability)."""
-        if token not in self.sessions:
-            msg = "Invalid or expired token"
-            raise RpcError.permission_denied(msg)
-
-        user = self.sessions[token]
+    def _get_user_profile(self, token: str) -> dict[str, Any]:
+        """Get user profile data (not a capability) by token."""
+        user = self.sessions.get(token)
+        if not user:
+            raise RpcError.bad_request("Invalid or expired token")
         return {
             "userId": user.user_id,
             "username": user.username,
@@ -204,73 +166,56 @@ class UserService(RpcTarget):
             "role": user.role,
         }
 
-    def _check_permission(self, token: str, permission: str) -> bool:
-        """Check if the user with this token has the given permission."""
-        if token not in self.sessions:
-            return False
-
-        user = self.sessions[token]
-        return user._has_permission(permission)
-
-    def _list_users(self) -> list[dict[str, str]]:
-        """List all users (returns public info only, not capabilities)."""
-        return [
-            {"id": user.user_id, "username": user.username, "role": user.role}
-            for user in self.users.values()
-        ]
-
-    def _create_user(
-        self, username: str, email: str, role: str = "user"
-    ) -> dict[str, str]:
-        """Create a new user."""
-        # Check if username already exists
-        for user in self.users.values():
-            if user.username == username:
-                msg = f"Username {username} already exists"
-                raise RpcError.bad_request(msg)
-
-        # Generate new user ID
-        user_id = f"user{len(self.users) + 1}"
-
-        # Create user
-        user = User(user_id, username, email, role)
-        self.users[user_id] = user
-
-        logger.info("Created new user: %s (id: %s, role: %s)", username, user_id, role)
-
-        return {"userId": user_id, "username": username, "email": email, "role": role}
+    def _validate_token(self, token: str, permission: str | None = None) -> dict[str, Any]:
+        """Validate a token and optionally check permission. Returns user info."""
+        user = self.sessions.get(token)
+        if not user:
+            raise RpcError.bad_request("Invalid or expired token")
+        
+        result = {
+            "valid": True,
+            "userId": user.user_id,
+            "username": user.username,
+            "role": user.role,
+        }
+        
+        if permission:
+            result["hasPermission"] = user._has_permission(permission)
+        
+        return result
 
 
-async def main():
-    """Run the user service."""
-    config = ServerConfig(
-        host="127.0.0.1",
-        port=8081,  # User service on port 8081
-        include_stack_traces=False,
-    )
-
-    server = Server(config)
-
-    # Register the user service at capability ID 0
+async def main() -> None:
+    """Run the User Service."""
     user_service = UserService()
-    server.register_capability(0, user_service)
 
-    async with server:
-        logger.info("🔐 User Service running on http://127.0.0.1:8081")
-        logger.info("   Endpoint: http://127.0.0.1:8081/rpc/batch")
-        logger.info("")
-        logger.info("Available users:")
-        logger.info("  - alice (admin)")
-        logger.info("  - bob (user)")
-        logger.info("  - charlie (user)")
-        logger.info("")
-        logger.info("Press Ctrl+C to stop")
-        logger.info("")
+    async def rpc_handler(request: web.Request) -> web.Response:
+        return await aiohttp_batch_rpc_handler(request, user_service)
 
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("\nShutting down user service...")
+    app = web.Application()
+    app.router.add_post("/rpc/batch", rpc_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, "127.0.0.1", 8081)
+    await site.start()
+
+    print("🔐 User Service running on http://127.0.0.1:8081")
+    print("   Endpoint: http://127.0.0.1:8081/rpc/batch")
+    print()
+    print("Available users:")
+    for username, data in USERS_DB.items():
+        print(f"  - {username} ({data['role']})")
+    print()
+    print("Press Ctrl+C to stop")
+
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":

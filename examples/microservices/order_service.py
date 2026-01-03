@@ -1,221 +1,172 @@
-"""Order Service - Manages orders with user authentication.
-
-This microservice demonstrates:
-- Service-to-service RPC calls
-- Cross-service authentication using capabilities
-- Permission checking via user capabilities
-- Service mesh communication
+"""Order Service - Manages orders with capability-based authorization.
 
 Run:
-    python examples/microservices/order_service.py
+    uv run python examples/microservices/order_service.py
 """
 
-from __future__ import annotations
-
 import asyncio
-import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from capnweb.client import Client, ClientConfig
-from capnweb.error import RpcError
-from capnweb.server import Server, ServerConfig
-from capnweb.types import RpcTarget
+from aiohttp import web
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from capnweb import RpcError, RpcTarget, RpcStub, aiohttp_batch_rpc_handler
 
 
 @dataclass
-class Order(RpcTarget):
-    """Represents a single order."""
+class Order:
+    """Order data."""
 
     order_id: str
     user_id: str
-    items: list[dict]
+    items: list[dict[str, Any]]
     total: float
     status: str = "pending"
 
-    async def call(self, method: str, args: list[Any]) -> Any:
-        """Handle method calls."""
-        match method:
-            case "getId":
-                return self.order_id
-            case "getUserId":
-                return self.user_id
-            case "getItems":
-                return self.items
-            case "getTotal":
-                return self.total
-            case "getStatus":
-                return self.status
-            case "cancel":
-                return await self._cancel()
-            case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
-
-    async def get_property(self, property: str) -> Any:
-        """Handle property access."""
-        match property:
-            case "id":
-                return self.order_id
-            case "userId":
-                return self.user_id
-            case "items":
-                return self.items
-            case "total":
-                return self.total
-            case "status":
-                return self.status
-            case _:
-                msg = f"Property {property} not found"
-                raise RpcError.not_found(msg)
-
-    async def _cancel(self) -> dict[str, str]:
-        """Cancel the order."""
-        if self.status == "cancelled":
-            msg = "Order is already cancelled"
-            raise RpcError.bad_request(msg)
-
-        self.status = "cancelled"
-        logger.info("Order %s cancelled", self.order_id)
-
-        return {"status": "cancelled", "orderId": self.order_id}
-
 
 class OrderService(RpcTarget):
-    """Order service - manages orders and coordinates with user service."""
+    """Order Service - manages orders with capability-based authorization."""
 
-    def __init__(self, user_service_url: str):
-        self.user_service_url = user_service_url
-        self.user_service_client: Client | None = None
+    def __init__(self) -> None:
         self.orders: dict[str, Order] = {}
-        self.next_order_id = 1
+        self.order_counter = 0
 
     async def call(self, method: str, args: list[Any]) -> Any:
-        """Handle RPC method calls."""
+        """Handle RPC calls."""
         match method:
             case "createOrder":
                 return await self._create_order(args[0], args[1])
+            case "listOrders":
+                return await self._list_orders(args[0])
             case "getOrder":
                 return self._get_order(args[0])
-            case "listOrders":
-                return await self._list_orders(args[0] if args else None)
             case "cancelOrder":
-                return await self._cancel_order(args[0])
+                return await self._cancel_order(args[0], args[1])
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
+    async def get_property(self, name: str) -> Any:
         """Handle property access."""
-        match property:
-            case "orderCount":
-                return len(self.orders)
-            case _:
-                msg = f"Property {property} not found"
-                raise RpcError.not_found(msg)
+        raise RpcError.not_found(f"Property '{name}' not found")
 
-    async def _get_user_service(self) -> Client:
-        """Get or create user service client."""
-        if self.user_service_client is None:
-            config = ClientConfig(url=self.user_service_url)
-            self.user_service_client = Client(config)
-        return self.user_service_client
-
-    async def _create_order(self, user_id: str, items: list[dict]) -> dict[str, Any]:
+    async def _create_order(self, user_capability: RpcStub, items: list[dict[str, Any]]) -> dict[str, Any]:
         """Create a new order.
-
+        
         Args:
-            user_id: User ID from auth token (permissions already checked by gateway)
+            user_capability: User capability for authorization
             items: List of items to order
         """
+        # Get user ID from capability (public API)
+        user_id = await user_capability.getId()
+
+        # Check permission (public API)
+        has_permission = await user_capability.hasPermission("order.create")
+
+        if not has_permission:
+            raise RpcError.permission_denied("You don't have permission to create orders")
+
         # Calculate total
         total = sum(item.get("price", 0) * item.get("quantity", 1) for item in items)
 
         # Create order
-        order_id = f"order{self.next_order_id}"
-        self.next_order_id += 1
-
-        order = Order(order_id, user_id, items, total)
-        self.orders[order_id] = order
-
-        logger.info(
-            "Created order %s for user %s, total: $%.2f", order_id, user_id, total
+        self.order_counter += 1
+        order_id = f"order{self.order_counter}"
+        order = Order(
+            order_id=order_id,
+            user_id=user_id,
+            items=items,
+            total=total,
+            status="pending",
         )
+        self.orders[order_id] = order
 
         return {
             "orderId": order_id,
-            "userId": user_id,
-            "items": items,
             "total": total,
-            "status": "pending",
+            "status": order.status,
+            "itemCount": len(items),
         }
 
-    def _get_order(self, order_id: str) -> Order:
-        """Get an order by ID (returns capability)."""
-        if order_id not in self.orders:
-            msg = f"Order {order_id} not found"
-            raise RpcError.not_found(msg)
+    async def _list_orders(self, user_capability: RpcStub) -> list[dict[str, Any]]:
+        """List orders for a user."""
+        # Get user ID from capability (public API)
+        user_id = await user_capability.getId()
 
-        return self.orders[order_id]
+        # Get user role (public API)
+        role = await user_capability.getRole()
 
-    async def _list_orders(self, user_id: str | None = None) -> list[dict]:
-        """List orders (optionally filtered by user)."""
-        if user_id is None:
-            # No filter, return all orders
+        # Admins see all orders, users see only their own
+        if role == "admin":
             orders = list(self.orders.values())
         else:
-            # Filter by user
             orders = [o for o in self.orders.values() if o.user_id == user_id]
 
         return [
-            {
-                "orderId": o.order_id,
-                "userId": o.user_id,
-                "items": o.items,
-                "total": o.total,
-                "status": o.status,
-            }
+            {"orderId": o.order_id, "total": o.total, "status": o.status}
             for o in orders
         ]
 
-    async def _cancel_order(self, order_id: str) -> dict[str, str]:
-        """Cancel an order (permissions already checked by gateway)."""
-        order = self._get_order(order_id)
+    def _get_order(self, order_id: str) -> dict[str, Any]:
+        """Get order details."""
+        order = self.orders.get(order_id)
+        if not order:
+            raise RpcError.not_found(f"Order '{order_id}' not found")
 
-        # Cancel the order
-        return await order.call("cancel", [])
+        return {
+            "orderId": order.order_id,
+            "userId": order.user_id,
+            "items": order.items,
+            "total": order.total,
+            "status": order.status,
+        }
+
+    async def _cancel_order(self, order_id: str, user_capability: RpcStub) -> dict[str, Any]:
+        """Cancel an order (admin only)."""
+        # Check permission (public API)
+        has_permission = await user_capability.hasPermission("order.cancel")
+
+        if not has_permission:
+            raise RpcError.permission_denied("You don't have permission to cancel orders")
+
+        order = self.orders.get(order_id)
+        if not order:
+            raise RpcError.not_found(f"Order '{order_id}' not found")
+
+        order.status = "cancelled"
+
+        return {
+            "orderId": order_id,
+            "status": order.status,
+        }
 
 
-async def main():
-    """Run the order service."""
-    config = ServerConfig(
-        host="127.0.0.1",
-        port=8082,  # Order service on port 8082
-        include_stack_traces=False,
-    )
+async def main() -> None:
+    """Run the Order Service."""
+    order_service = OrderService()
 
-    server = Server(config)
+    async def rpc_handler(request: web.Request) -> web.Response:
+        return await aiohttp_batch_rpc_handler(request, order_service)
 
-    # Register the order service at capability ID 0
-    # It will call the user service at http://127.0.0.1:8081
-    order_service = OrderService(user_service_url="http://127.0.0.1:8081/rpc/batch")
-    server.register_capability(0, order_service)
+    app = web.Application()
+    app.router.add_post("/rpc/batch", rpc_handler)
 
-    async with server:
-        logger.info("📦 Order Service running on http://127.0.0.1:8082")
-        logger.info("   Endpoint: http://127.0.0.1:8082/rpc/batch")
-        logger.info("   User Service: http://127.0.0.1:8081/rpc/batch")
-        logger.info("")
-        logger.info("Press Ctrl+C to stop")
-        logger.info("")
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("\nShutting down order service...")
+    site = web.TCPSite(runner, "127.0.0.1", 8082)
+    await site.start()
+
+    print("📦 Order Service running on http://127.0.0.1:8082")
+    print("   Endpoint: http://127.0.0.1:8082/rpc/batch")
+    print()
+    print("Press Ctrl+C to stop")
+
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":

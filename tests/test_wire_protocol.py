@@ -123,17 +123,17 @@ class TestEscapedArrays:
     """Tests for escaped literal arrays [[...]]."""
 
     def test_escaped_array_parsing(self):
-        """Test that [[...]] is parsed as escaped literal."""
-        # An array starting with a string should be escaped when serialized
-        literal_array = ["error", "not really an error"]
-
-        # When we serialize it WITH escaping enabled, it should be wrapped
-        json_output = wire_expression_to_json(literal_array, escape_arrays=True)
-        assert json_output == [["error", "not really an error"]]
-
-        # When we parse it back, it should unwrap
-        parsed = wire_expression_from_json(json_output)
-        assert parsed == ["error", "not really an error"]
+        """Test that [[...]] is NOT unwrapped by wire_expression_from_json.
+        
+        Escaped array unwrapping is done by Parser, not wire_expression_from_json.
+        wire_expression_from_json only handles wire-level special forms.
+        """
+        # An escaped array [[...]] is left as-is by wire_expression_from_json
+        escaped = [["error", "not really an error"]]
+        
+        # wire_expression_from_json does NOT unwrap - that's Parser's job
+        parsed = wire_expression_from_json(escaped)
+        assert parsed == [["error", "not really an error"]]
         assert isinstance(parsed, list)
         assert not isinstance(parsed, WireError)
 
@@ -150,19 +150,21 @@ class TestEscapedArrays:
         assert json_output == [123, "hello", 456]
 
     def test_escaped_array_roundtrip(self):
-        """Test that escaped arrays survive roundtrip."""
-        # Start with a literal array that looks like a special form
-        original = ["import", 123, "foo"]
+        """Test that escaped arrays are preserved by wire_expression_from_json.
+        
+        wire_expression_from_json does NOT unwrap escaped arrays - that's Parser's job.
+        """
+        # Start with an escaped array that looks like a special form
+        escaped = [["import", 123, "foo"]]
 
-        # Serialize WITH escaping enabled
-        serialized = wire_expression_to_json(original, escape_arrays=True)
-        assert serialized == [["import", 123, "foo"]]
-
-        # Deserialize
-        parsed = wire_expression_from_json(serialized)
-        assert parsed == original
+        # wire_expression_from_json does NOT unwrap - leaves as-is
+        parsed = wire_expression_from_json(escaped)
+        assert parsed == [["import", 123, "foo"]]
         assert isinstance(parsed, list)
-        assert not isinstance(parsed, WireImport)
+        
+        # Serialize back - wire_expression_to_json doesn't escape
+        serialized = wire_expression_to_json(parsed)
+        assert serialized == [["import", 123, "foo"]]
 
     def test_actual_wire_expression_not_double_wrapped(self):
         """Test that actual wire expressions are not double-wrapped."""

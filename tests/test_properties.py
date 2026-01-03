@@ -856,16 +856,14 @@ class TestWireExpressionProperties:
         assert parsed.timestamp == date.timestamp
 
     @given(st.lists(simple_json_strategy(), min_size=1, max_size=5))
-    def test_escaped_arrays_in_pipeline_args(self, args: list[Any]) -> None:
-        """Arrays in pipeline arguments should be escapable."""
-        # When escape_arrays=True, arrays should be wrapped
-        json_value = wire_expression_to_json(args, escape_arrays=True)
+    def test_arrays_in_pipeline_args(self, args: list[Any]) -> None:
+        """Arrays in pipeline arguments should serialize correctly."""
+        # wire_expression_to_json simply converts to JSON without escaping
+        json_value = wire_expression_to_json(args)
 
-        # Should be wrapped: [[...]]
+        # Should be the same structure
         assert isinstance(json_value, list)
-        if args and isinstance(args[0], list):
-            # Nested arrays get double-wrapped
-            assert isinstance(json_value[0], list)
+        assert json_value == args
 
     @given(st.integers(min_value=-10000, max_value=10000))
     def test_import_export_promise_stay_as_lists(self, id_value: int) -> None:

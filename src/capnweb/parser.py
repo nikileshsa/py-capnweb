@@ -1,22 +1,35 @@
 """Parser (Evaluator) for converting wire format to Python objects.
 
-This module replaces the old ExpressionEvaluator's deserialization logic with
-a cleaner, more explicit approach. The Parser takes JSON-serializable wire
-expressions and, with the help of an Importer (the RpcSession), converts them
-to Python objects wrapped in RpcPayload.
+This module implements the Evaluator from TypeScript capnweb. It takes
+JSON-serializable wire expressions and, with the help of an Importer
+(the RpcSession), converts them to Python objects wrapped in RpcPayload.
+
+NOTE: This module now uses CapabilityCodec internally for value decoding.
+The Parser class remains for backwards compatibility and additional features
+like remap handling.
+
+Key responsibilities:
+- Decode wire format using CapabilityCodec
+- Handle remap expressions (not handled by CapabilityCodec)
+- Create RpcStub/RpcPromise for capability expressions
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from capnweb.error import ErrorCode, RpcError
-from capnweb.hooks import (
-    ErrorStubHook,
+from capnweb.capability_codec import (
+    CapabilityCodec,
+    CapabilityCodecOptions,
+    DANGEROUS_KEYS,
+    MAX_RESOLVE_DEPTH as MAX_PARSE_DEPTH,
 )
+from capnweb.error import ErrorCode, RpcError
+from capnweb.hooks import ErrorStubHook
 from capnweb.payload import RpcPayload
 from capnweb.stubs import RpcPromise, RpcStub
-from capnweb.wire import WireError, WireExport
+from capnweb.value_codec import ValueCodecOptions
+from capnweb.wire import WireError, WireExport, is_int_not_bool as _is_int_not_bool
 from capnweb.wire import WirePromise as WirePromiseType
 
 if TYPE_CHECKING:
@@ -48,6 +61,20 @@ class Importer(Protocol):
 
         Returns:
             A PromiseStubHook that will resolve when the promise settles
+        """
+        ...
+
+    def get_export(self, export_id: int) -> StubHook | None:
+        """Get an export by ID (for remap - sender passing our object back).
+
+        When we receive ["import", id] or ["remap", id, ...], the id refers to
+        our export table (from the sender's perspective it's their import).
+
+        Args:
+            export_id: The export ID to look up
+
+        Returns:
+            The StubHook for this export, or None if not found
         """
         ...
 
@@ -85,61 +112,151 @@ class Parser:
 
         Returns:
             An RpcPayload.owned() containing the parsed value
+            
+        Raises:
+            ValueError: If max depth exceeded or malformed expression
         """
-        parsed = self._parse_value(wire_value)
+        parsed = self._parse_value(wire_value, depth=0)
         return RpcPayload.owned(parsed)
 
-    def _parse_value(self, value: Any) -> Any:
+    def _parse_value(self, value: Any, *, depth: int) -> Any:  # noqa: C901
         """Parse a single wire value recursively.
+        
+        This implements the same algorithm as TypeScript's Evaluator.evaluateImpl().
+        
+        Key insight: All application arrays are ESCAPED on the wire by wrapping them
+        in an outer single-element array. So [[1,2,3]] on wire becomes [1,2,3] in app.
+        Unescaped arrays starting with a string tag are special forms.
 
         Args:
             value: The wire value to parse
+            depth: Current recursion depth (for security limiting)
 
         Returns:
             The parsed Python value
+            
+        Raises:
+            ValueError: If max depth exceeded or malformed special form
         """
-        # Handle None and primitives
+        # Security: Prevent stack overflow from deeply nested malicious payloads
+        if depth > MAX_PARSE_DEPTH:
+            raise ValueError(
+                f"Expression exceeds maximum depth ({MAX_PARSE_DEPTH}). "
+                "Possible malicious payload or circular reference."
+            )
+        
+        # Handle None and primitives - pass through unchanged
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
 
-        # Handle lists - could be wire expressions or arrays
+        # Handle arrays - could be escaped arrays or special forms
         if isinstance(value, list):
-            if len(value) >= 2 and isinstance(value[0], str):
-                # This might be a wire expression like ["export", id]
-                wire_type = value[0]
+            # Check for escaped array: [[...]]
+            # If array has exactly one element and that element is also an array,
+            # it's an escaped literal array - unwrap and parse contents
+            if len(value) == 1 and isinstance(value[0], list):
+                inner = value[0]
+                return [self._parse_value(item, depth=depth + 1) for item in inner]
+            
+            # Check for special forms (arrays starting with a string tag)
+            if value and isinstance(value[0], str):
+                tag = value[0]
+                
+                # Handle each special form with proper type validation
+                # This matches TypeScript's switch statement with break on validation failure
+                
+                if tag == "bigint":
+                    if len(value) == 2 and isinstance(value[1], str):
+                        # Python handles big integers natively
+                        return int(value[1])
+                    # Fall through to error
+                
+                elif tag == "date":
+                    if len(value) == 2 and isinstance(value[1], (int, float)):
+                        # Return as timestamp - could convert to datetime if needed
+                        from datetime import datetime, timezone
+                        return datetime.fromtimestamp(value[1] / 1000, tz=timezone.utc)
+                    # Fall through to error
+                
+                elif tag == "bytes":
+                    if len(value) == 2 and isinstance(value[1], str):
+                        import base64
+                        # Handle base64 with or without padding
+                        b64 = value[1]
+                        padding = 4 - len(b64) % 4
+                        if padding != 4:
+                            b64 += "=" * padding
+                        return base64.b64decode(b64)
+                    # Fall through to error
+                
+                elif tag == "error":
+                    if len(value) >= 3 and isinstance(value[1], str) and isinstance(value[2], str):
+                        return self._parse_error(value)
+                    # Fall through to error
+                
+                elif tag == "undefined":
+                    if len(value) == 1:
+                        return None  # Python's None is closest to undefined
+                    # Fall through to error
+                
+                elif tag == "inf":
+                    return float("inf")
+                
+                elif tag == "-inf":
+                    return float("-inf")
+                
+                elif tag == "nan":
+                    return float("nan")
+                
+                elif tag in ("import", "pipeline"):
+                    # These reference OUR exports (sender is passing our object back)
+                    if len(value) >= 2 and len(value) <= 4 and _is_int_not_bool(value[1]):
+                        # For now, treat as error - session handles these in push messages
+                        error = RpcError.bad_request(
+                            f"{tag} expressions should not appear in parse input"
+                        )
+                        return RpcStub(ErrorStubHook(error))
+                    # Fall through to error
+                
+                elif tag == "remap":
+                    # ["remap", importId, propertyPath, captures, instructions]
+                    # propertyPath can be null or list
+                    if (len(value) == 5 and _is_int_not_bool(value[1]) and
+                        (value[2] is None or isinstance(value[2], list)) and
+                        isinstance(value[3], list) and isinstance(value[4], list)):
+                        return self._parse_remap(value)
+                    # Malformed remap - fall through to regular array handling
+                
+                elif tag in ("export", "promise"):
+                    # These are capabilities being sent TO us
+                    if len(value) == 2 and _is_int_not_bool(value[1]):
+                        if tag == "promise":
+                            return self._parse_promise(value)
+                        else:
+                            return self._parse_export(value)
+                    # Malformed - fall through to regular array handling
+                
+                # Unknown tag or malformed special form
+                # Treat as regular array (could be application data that starts with a string)
+                # This is more lenient than TypeScript which throws, but safer for Python
+                pass
+            
+            # Array starting with string but not a valid special form
+            # Treat as regular array
+            return [self._parse_value(item, depth=depth + 1) for item in value]
 
-                if wire_type == "export":
-                    # ["export", export_id]
-                    return self._parse_export(value)
-
-                if wire_type == "import":
-                    # ["import", import_id]
-                    return self._parse_import(value)
-
-                if wire_type == "promise":
-                    # ["promise", promise_id]
-                    return self._parse_promise(value)
-
-                if wire_type == "error":
-                    # ["error", type, message, ...]
-                    return self._parse_error(value)
-
-                if wire_type == "pipeline":
-                    # ["pipeline", import_id, [...path], args]
-                    # This is handled by the session, not here
-                    # For now, treat as error
-
-                    error = RpcError.bad_request(
-                        "Pipeline expressions should not appear in parse input"
-                    )
-                    return RpcStub(ErrorStubHook(error))
-
-            # Regular array - parse each element
-            return [self._parse_value(item) for item in value]
-
-        # Handle dicts - parse each value
+        # Handle dicts - parse each value with dangerous key filtering
+        # (matches TypeScript's filtering of Object.prototype keys)
         if isinstance(value, dict):
-            return {key: self._parse_value(val) for key, val in value.items()}
+            result = {}
+            for key, val in value.items():
+                if key in DANGEROUS_KEYS:
+                    # Security: Skip dangerous keys that could cause mischief
+                    # Still parse the value to properly release any stubs
+                    self._parse_value(val, depth=depth + 1)
+                    continue
+                result[key] = self._parse_value(val, depth=depth + 1)
+            return result
 
         # For other types, return as-is
         return value
@@ -235,6 +352,77 @@ class Parser:
 
         # Wrap in ErrorStubHook and return as stub
         return RpcStub(ErrorStubHook(error))
+
+    def _parse_remap(self, wire_expr: list[Any]) -> Any:
+        """Parse a remap expression.
+
+        Remap implements the .map() operation, allowing a function to be applied
+        to array elements remotely without transferring all data back and forth.
+
+        Format: ["remap", importId, propertyPath, captures, instructions]
+
+        - importId: References our export table (sender passing our object back)
+        - propertyPath: Path to the property to map over (can be null)
+        - captures: Stubs captured by the mapper function
+        - instructions: JSON instructions describing the mapper
+
+        Args:
+            wire_expr: ["remap", importId, propertyPath, captures, instructions]
+
+        Returns:
+            An RpcPromise wrapping the mapped result
+        """
+        import_id = wire_expr[1]
+        property_path = wire_expr[2] or []  # Convert null to empty list
+        captures_wire = wire_expr[3]
+        instructions = wire_expr[4]
+
+        # Get the target from our export table
+        hook = self.importer.get_export(import_id)
+        if hook is None:
+            error = RpcError.bad_request(
+                f"No such entry on exports table: {import_id}"
+            )
+            return RpcStub(ErrorStubHook(error))
+
+        # Validate property path - must be strings or numbers
+        if not all(isinstance(p, (str, int)) for p in property_path):
+            error = RpcError.bad_request("Invalid property path in remap")
+            return RpcStub(ErrorStubHook(error))
+
+        # Process captures
+        # Each capture is ["import", id] or ["export", id]
+        # "export" means sender is exporting a new stub to us (we import it)
+        # "import" means sender is passing back our export
+        captures: list = []
+        for cap in captures_wire:
+            if (not isinstance(cap, list) or len(cap) != 2 or
+                cap[0] not in ("import", "export") or
+                not isinstance(cap[1], int)):
+                error = RpcError.bad_request(
+                    f"Invalid map capture: {cap}"
+                )
+                return RpcStub(ErrorStubHook(error))
+
+            if cap[0] == "export":
+                # Sender is exporting a new stub to us - import it
+                cap_hook = self.importer.import_capability(cap[1])
+                captures.append(cap_hook)
+            else:  # "import"
+                # Sender is passing back our export
+                exp = self.importer.get_export(cap[1])
+                if exp is None:
+                    error = RpcError.bad_request(
+                        f"No such entry on exports table: {cap[1]}"
+                    )
+                    return RpcStub(ErrorStubHook(error))
+                captures.append(exp.dup())
+
+        # Apply the map operation
+        result_hook = hook.map(property_path, captures, instructions)
+
+        # Return as promise (map results are always promises)
+        return RpcPromise(result_hook)
 
     def parse_payload_value(self, wire_value: Any) -> RpcPayload:
         """Parse a wire value and return as owned payload.

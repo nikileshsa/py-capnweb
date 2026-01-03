@@ -87,11 +87,17 @@ class Serializer:
                 return WirePromise(export_id).to_json()
 
             case list():
-                # Handle lists
-                return [self.serialize(item) for item in value]
+                # Handle lists - ESCAPE by wrapping in outer array
+                # This matches TypeScript: return [result] to escape literal arrays
+                # so they don't get confused with special forms like ["export", id]
+                serialized = [self.serialize(item) for item in value]
+                return [serialized]  # Wrap in outer array to escape
 
             case dict():
-                # Handle dicts
+                # Handle dicts - validate keys are strings (JSON requirement)
+                for key in value.keys():
+                    if not isinstance(key, str):
+                        raise TypeError(f"JSON object keys must be strings, got {type(key).__name__}")
                 return {key: self.serialize(val) for key, val in value.items()}
 
             case RpcPayload():

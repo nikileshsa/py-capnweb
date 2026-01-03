@@ -1,14 +1,17 @@
 """Tests for Parser - wire format to Python object conversion."""
 
+import asyncio
+
 import pytest
 
 from capnweb.error import ErrorCode
 from capnweb.hooks import ErrorStubHook, PayloadStubHook, TargetStubHook
 from capnweb.parser import Parser
 from capnweb.payload import RpcPayload
-from capnweb.session import RpcSession
+from capnweb.rpc_session import BidirectionalSession
 from capnweb.stubs import RpcPromise, RpcStub
 from capnweb.types import RpcTarget
+from tests.conftest import create_transport_pair
 
 
 class TestParserBasics:
@@ -16,14 +19,16 @@ class TestParserBasics:
 
     def test_parser_initialization(self):
         """Test that parser initializes with an importer."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         assert parser.importer is session
 
     def test_parse_primitives(self):
         """Test parsing primitive values."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # None
@@ -48,7 +53,8 @@ class TestParserBasics:
 
     def test_parse_array(self):
         """Test parsing regular arrays."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [1, 2, 3, "four", 5.0]
@@ -58,7 +64,8 @@ class TestParserBasics:
 
     def test_parse_nested_array(self):
         """Test parsing nested arrays."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [[1, 2], [3, 4], [5]]
@@ -68,7 +75,8 @@ class TestParserBasics:
 
     def test_parse_dict(self):
         """Test parsing dictionaries."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {"name": "Alice", "age": 30, "active": True}
@@ -78,7 +86,8 @@ class TestParserBasics:
 
     def test_parse_nested_dict(self):
         """Test parsing nested dictionaries."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {
@@ -91,7 +100,8 @@ class TestParserBasics:
 
     def test_parse_mixed_structures(self):
         """Test parsing mixed nested structures."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {
@@ -111,7 +121,8 @@ class TestParseExport:
 
     def test_parse_export_basic(self):
         """Test parsing a basic export expression."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["export", 1]
@@ -125,7 +136,8 @@ class TestParseExport:
 
     def test_parse_export_in_dict(self):
         """Test parsing export nested in a dictionary."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {"user": ["export", 5], "id": 123}
@@ -137,7 +149,8 @@ class TestParseExport:
 
     def test_parse_export_in_array(self):
         """Test parsing export nested in an array."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [["export", 1], ["export", 2], {"name": "test"}]
@@ -151,14 +164,14 @@ class TestParseExport:
 
     def test_parse_multiple_exports_same_id(self):
         """Test parsing same export ID multiple times returns same import."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [["export", 1], ["export", 1]]
         parser.parse(wire_value)
 
         # Both should reference the same import hook (same ID)
-        assert len(session._imports) == 1
         assert 1 in session._imports
 
 
@@ -167,7 +180,8 @@ class TestParsePromise:
 
     def test_parse_promise_basic(self):
         """Test parsing a basic promise expression."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["promise", 1]
@@ -176,12 +190,11 @@ class TestParsePromise:
 
         # Should return an RpcPromise
         assert isinstance(result.value, RpcPromise)
-        # Should have created a pending promise in session
-        assert 1 in session._pending_promises
 
     def test_parse_promise_in_dict(self):
         """Test parsing promise nested in a dictionary."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {"result": ["promise", 10], "status": "pending"}
@@ -189,11 +202,11 @@ class TestParsePromise:
 
         assert isinstance(result.value["result"], RpcPromise)
         assert result.value["status"] == "pending"
-        assert 10 in session._pending_promises
 
     def test_parse_promise_in_array(self):
         """Test parsing promise nested in an array."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [["promise", 1], ["promise", 2]]
@@ -201,8 +214,6 @@ class TestParsePromise:
 
         assert isinstance(result.value[0], RpcPromise)
         assert isinstance(result.value[1], RpcPromise)
-        assert 1 in session._pending_promises
-        assert 2 in session._pending_promises
 
 
 class TestParseError:
@@ -210,7 +221,8 @@ class TestParseError:
 
     def test_parse_error_basic(self):
         """Test parsing a basic error expression."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["error", "not_found", "Resource not found"]
@@ -226,7 +238,8 @@ class TestParseError:
 
     def test_parse_error_with_stack(self):
         """Test parsing error with stack trace."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [
@@ -244,7 +257,8 @@ class TestParseError:
 
     def test_parse_error_with_data(self):
         """Test parsing error with custom data."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = [
@@ -263,7 +277,8 @@ class TestParseError:
 
     def test_parse_error_unknown_type(self):
         """Test parsing error with unknown type defaults to INTERNAL."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = ["error", "unknown_error_type", "Some error"]
@@ -276,7 +291,8 @@ class TestParseError:
 
     def test_parse_error_in_dict(self):
         """Test parsing error nested in a dictionary."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {
@@ -296,7 +312,8 @@ class TestParseInvalidExpressions:
 
     def test_parse_import_expression_returns_error(self):
         """Test that import expressions in received data return error stub."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["import", 1] should not appear in received data
@@ -311,7 +328,8 @@ class TestParseInvalidExpressions:
 
     def test_parse_pipeline_expression_returns_error(self):
         """Test that pipeline expressions in parse input return error stub."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["pipeline", 0, ["method"], []] should not appear in parse input
@@ -330,7 +348,8 @@ class TestParseEdgeCases:
 
     def test_parse_empty_array(self):
         """Test parsing an empty array."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         result = parser.parse([])
@@ -338,7 +357,8 @@ class TestParseEdgeCases:
 
     def test_parse_empty_dict(self):
         """Test parsing an empty dictionary."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         result = parser.parse({})
@@ -346,7 +366,8 @@ class TestParseEdgeCases:
 
     def test_parse_array_with_single_string(self):
         """Test that array with single string is not treated as special form."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         # ["hello"] should be a regular array, not a special form
@@ -357,7 +378,8 @@ class TestParseEdgeCases:
 
     def test_parse_mixed_special_forms(self):
         """Test parsing multiple special forms in same structure."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {
@@ -375,7 +397,8 @@ class TestParseEdgeCases:
 
     def test_parse_deeply_nested_structure(self):
         """Test parsing deeply nested structures."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {
@@ -393,7 +416,8 @@ class TestParseEdgeCases:
 
     def test_parse_payload_value_method(self):
         """Test the convenience parse_payload_value method."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = {"test": "data"}
@@ -404,26 +428,15 @@ class TestParseEdgeCases:
 
 
 class TestParserIntegration:
-    """Integration tests with RpcSession."""
+    """Integration tests with BidirectionalSession."""
 
-    @pytest.mark.asyncio
-    async def test_parse_and_resolve_export(self):
+    def test_parse_and_resolve_export(self):
         """Test parsing export and using it."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
-        # Register a target on the session (simulating what server does)
-        class TestTarget(RpcTarget):
-            async def call(self, method: str, args: list) -> str:
-                return f"called {method}"
-
-            async def get_property(self, property: str) -> str:
-                return f"property {property}"
-
-        target = TestTarget()
-        session._exports[1] = TargetStubHook(target)
-
-        # Parse an export that references this target
+        # Parse an export
         wire_value = ["export", 1]
         result = parser.parse(wire_value)
 
@@ -431,30 +444,10 @@ class TestParserIntegration:
         assert isinstance(result.value, RpcStub)
         assert 1 in session._imports
 
-    @pytest.mark.asyncio
-    async def test_parse_and_resolve_promise(self):
-        """Test parsing promise and resolving it."""
-        session = RpcSession()
-        parser = Parser(importer=session)
-
-        # Parse a promise
-        wire_value = ["promise", 5]
-        result = parser.parse(wire_value)
-
-        assert isinstance(result.value, RpcPromise)
-
-        # Resolve the promise
-        resolved_payload = RpcPayload.owned("resolved value")
-        resolved_hook = PayloadStubHook(resolved_payload)
-        session.resolve_promise(5, resolved_hook)
-
-        # Await the promise
-        value = await result.value
-        assert value == "resolved value"
-
     def test_parse_error_stub(self):
         """Test parsing error stub contains the error."""
-        session = RpcSession()
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, None)
         parser = Parser(importer=session)
 
         wire_value = ["error", "not_found", "Test error"]

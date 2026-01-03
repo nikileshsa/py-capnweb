@@ -5,10 +5,9 @@ This example demonstrates:
 - Bidirectional RPC (server can call client methods)
 - Multiple connected clients
 - Broadcasting messages to all clients
-- Client capability management
 
 Run:
-    python examples/chat/server.py
+    uv run python examples/chat/server.py
 """
 
 from __future__ import annotations
@@ -18,12 +17,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from capnweb.error import RpcError
-from capnweb.server import Server, ServerConfig
-from capnweb.types import RpcTarget
+from aiohttp import web
+
+from capnweb import RpcError, RpcTarget, RpcStub, BidirectionalSession
+from capnweb.ws_transport import WebSocketServerTransport
 
 if TYPE_CHECKING:
-    from capnweb.stubs import RpcStub
+    pass
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,9 +33,7 @@ logger = logging.getLogger(__name__)
 class ChatRoom(RpcTarget):
     """Chat room that manages multiple clients and broadcasts messages."""
 
-    clients: dict[str, RpcStub] = field(
-        default_factory=dict
-    )  # username -> client capability
+    clients: dict[str, tuple[RpcStub, BidirectionalSession]] = field(default_factory=dict)
     message_history: list[dict[str, str]] = field(default_factory=list)
 
     async def call(self, method: str, args: list[Any]) -> Any:
@@ -52,38 +50,27 @@ class ChatRoom(RpcTarget):
             case "listUsers":
                 return self._list_users()
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
+    async def get_property(self, name: str) -> Any:
         """Handle property access."""
-        match property:
+        match name:
             case "userCount":
                 return len(self.clients)
             case "messageCount":
                 return len(self.message_history)
             case _:
-                msg = f"Property {property} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Property '{name}' not found")
 
-    async def _join(self, username: str, client_capability: RpcStub) -> dict[str, Any]:
-        """Add a client to the chat room.
-
-        Args:
-            username: The user's chosen username
-            client_capability: Capability to the client for bidirectional RPC
-
-        Returns:
-            Welcome message with room info
-        """
+    async def _join(self, username: str, client_callback: RpcStub) -> dict[str, Any]:
+        """Add a client to the chat room."""
         if username in self.clients:
-            msg = f"Username {username} is already taken"
-            raise RpcError.bad_request(msg)
+            raise RpcError.bad_request(f"Username '{username}' is already taken")
 
-        # Store client capability
-        self.clients[username] = client_capability
+        # Store client callback (we don't have session reference here, store None)
+        self.clients[username] = (client_callback, None)  # type: ignore
 
-        # Notify all other clients about the new user
+        # Notify all other clients
         join_msg = f"{username} joined the chat"
         await self._broadcast_system_message(join_msg, exclude=username)
 
@@ -98,12 +85,11 @@ class ChatRoom(RpcTarget):
     async def _leave(self, username: str) -> dict[str, str]:
         """Remove a client from the chat room."""
         if username not in self.clients:
-            msg = f"User {username} not found"
-            raise RpcError.not_found(msg)
+            raise RpcError.not_found(f"User '{username}' not found")
 
         # Remove client
-        client = self.clients.pop(username)
-        client.dispose()  # Clean up the capability
+        client_callback, _ = self.clients.pop(username)
+        client_callback.dispose()
 
         # Notify remaining clients
         leave_msg = f"{username} left the chat"
@@ -113,17 +99,16 @@ class ChatRoom(RpcTarget):
 
         return {"message": f"Goodbye, {username}!"}
 
-    async def _send_message(self, username: str, text: str) -> dict[str, str | int]:
+    async def _send_message(self, username: str, text: str) -> dict[str, Any]:
         """Broadcast a message to all clients."""
         if username not in self.clients:
-            msg = f"User {username} not in chat room"
-            raise RpcError.not_found(msg)
+            raise RpcError.not_found(f"User '{username}' not in chat room")
 
         # Store in history
         message = {"username": username, "text": text, "type": "chat"}
         self.message_history.append(message)
 
-        # Broadcast to all clients (including sender)
+        # Broadcast to all clients
         await self._broadcast_message(message)
 
         logger.info("[%s] %s", username, text)
@@ -132,7 +117,6 @@ class ChatRoom(RpcTarget):
 
     def _get_history(self) -> list[dict[str, str]]:
         """Get recent message history."""
-        # Return last 50 messages
         return self.message_history[-50:]
 
     def _list_users(self) -> list[str]:
@@ -141,78 +125,89 @@ class ChatRoom(RpcTarget):
 
     async def _broadcast_message(self, message: dict[str, str]) -> None:
         """Broadcast a message to all clients."""
-        # Create a list of tasks to call all clients in parallel
-        tasks = []
-        for username, client in list(self.clients.items()):
+        for username, (client_callback, _) in list(self.clients.items()):
             try:
-                # Call the client's onMessage method
-                task = client.onMessage(message)
-                tasks.append((username, task))
-            except Exception as e:
-                logger.error("Error preparing broadcast to %s: %s", username, e)
-
-        # Execute all calls in parallel
-        for username, task in tasks:
-            try:
-                await task
+                # Call the client's onMessage method via RPC (public API)
+                await client_callback.onMessage(message)
             except Exception as e:
                 logger.error("Error broadcasting to %s: %s", username, e)
-                # Remove client if they're unreachable
+                # Remove unreachable client
                 if username in self.clients:
-                    self.clients.pop(username).dispose()
+                    self.clients.pop(username)[0].dispose()
 
-    async def _broadcast_system_message(
-        self, text: str, exclude: str | None = None
-    ) -> None:
+    async def _broadcast_system_message(self, text: str, exclude: str | None = None) -> None:
         """Broadcast a system message to all clients."""
         message = {"username": "System", "text": text, "type": "system"}
         self.message_history.append(message)
 
-        tasks = []
-        for username, client in list(self.clients.items()):
+        for username, (client_callback, _) in list(self.clients.items()):
             if username != exclude:
                 try:
-                    task = client.onMessage(message)
-                    tasks.append((username, task))
+                    # Call the client's onMessage method via RPC (public API)
+                    await client_callback.onMessage(message)
                 except Exception as e:
-                    logger.error(
-                        "Error preparing system message to %s: %s", username, e
-                    )
-
-        for username, task in tasks:
-            try:
-                await task
-            except Exception as e:
-                logger.error("Error sending system message to %s: %s", username, e)
+                    logger.error("Error sending system message to %s: %s", username, e)
 
 
-async def main():
+# Global chat room instance
+chat_room = ChatRoom()
+
+
+async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
+    """Handle WebSocket connections for chat."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    # Create transport and session
+    transport = WebSocketServerTransport(ws)
+    session = BidirectionalSession(transport, chat_room)
+    session.start()
+
+    logger.info("New WebSocket connection")
+
+    try:
+        # Read messages from WebSocket and feed to transport
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                transport.feed_message(msg.data)
+            elif msg.type == web.WSMsgType.BINARY:
+                transport.feed_message(msg.data.decode("utf-8"))
+            elif msg.type == web.WSMsgType.ERROR:
+                transport.set_error(ws.exception() or Exception("WebSocket error"))
+                break
+    except Exception as e:
+        logger.error("WebSocket error: %s", e)
+        transport.set_error(e)
+    finally:
+        transport.set_closed()
+        logger.info("WebSocket connection closed")
+
+    return ws
+
+
+async def main() -> None:
     """Run the chat server."""
-    config = ServerConfig(
-        host="127.0.0.1",
-        port=8080,
-        include_stack_traces=False,  # Security: disabled in production
-    )
+    app = web.Application()
+    app.router.add_get("/rpc/ws", handle_websocket)
 
-    server = Server(config)
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-    # Create and register the chat room
-    chat_room = ChatRoom()
-    server.register_capability(0, chat_room)
+    site = web.TCPSite(runner, "127.0.0.1", 8080)
+    await site.start()
 
-    async with server:
-        logger.info("🚀 Chat server running on http://127.0.0.1:8080")
-        logger.info("   WebSocket endpoint: ws://127.0.0.1:8080/rpc/ws")
-        logger.info("   HTTP endpoint: http://127.0.0.1:8080/rpc/batch")
-        logger.info("")
-        logger.info("Run clients with: python examples/chat/client.py")
-        logger.info("Press Ctrl+C to stop")
-        logger.info("")
+    logger.info("💬 Chat server running on http://127.0.0.1:8080")
+    logger.info("   WebSocket endpoint: ws://127.0.0.1:8080/rpc/ws")
+    logger.info("")
+    logger.info("Run clients with: uv run python examples/chat/client.py")
+    logger.info("Press Ctrl+C to stop")
 
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("\nShutting down chat server...")
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        logger.info("\nShutting down chat server...")
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":

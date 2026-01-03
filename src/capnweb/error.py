@@ -61,3 +61,24 @@ class RpcError(Exception):
     def internal(message: str, data: Any | None = None) -> RpcError:
         """Create an INTERNAL error."""
         return RpcError(ErrorCode.INTERNAL, message, data)
+
+    @staticmethod
+    def from_wire(
+        code: str,
+        message: str,
+        data: Any | None = None,
+        stack: str | None = None,
+    ) -> RpcError:
+        """Create an RpcError from wire format values.
+        
+        Args:
+            code: Error code string (e.g., "bad_request")
+            message: Error message
+            data: Optional error data
+            stack: Optional stack trace (ignored for security)
+        """
+        try:
+            error_code = ErrorCode(code)
+        except ValueError:
+            error_code = ErrorCode.INTERNAL
+        return RpcError(error_code, message, data)

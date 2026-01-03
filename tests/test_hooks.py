@@ -9,11 +9,9 @@ from capnweb.hooks import (
     ErrorStubHook,
     PayloadStubHook,
     PromiseStubHook,
-    RpcImportHook,
     TargetStubHook,
 )
 from capnweb.payload import RpcPayload
-from capnweb.session import RpcSession
 from capnweb.types import RpcTarget
 
 
@@ -63,7 +61,7 @@ class TestErrorStubHook:
         hook = ErrorStubHook(error)
         payload = RpcPayload.owned([])
 
-        result = await hook.call(["method"], payload)
+        result = hook.call(["method"], payload)
         assert result is hook
 
     def test_error_hook_get_returns_self(self):
@@ -115,7 +113,7 @@ class TestPayloadStubHookCall:
         hook = PayloadStubHook(payload)
         args = RpcPayload.owned([5, 3])
 
-        result_hook = await hook.call([], args)
+        result_hook = hook.call([], args)
 
         # Should return a PromiseStubHook
         assert isinstance(result_hook, PromiseStubHook)
@@ -135,7 +133,7 @@ class TestPayloadStubHookCall:
         hook = PayloadStubHook(payload)
         args = RpcPayload.owned([])
 
-        result_hook = await hook.call([], args)
+        result_hook = hook.call([], args)
 
         # Should return a PromiseStubHook that resolves to ErrorStubHook
         assert isinstance(result_hook, PromiseStubHook)
@@ -155,7 +153,7 @@ class TestPayloadStubHookCall:
         hook = PayloadStubHook(payload)
         args = RpcPayload.owned([])
 
-        result_hook = await hook.call([], args)
+        result_hook = hook.call([], args)
 
         # Should return an ErrorStubHook
         assert isinstance(result_hook, ErrorStubHook)
@@ -167,7 +165,7 @@ class TestPayloadStubHookCall:
         hook = PayloadStubHook(payload)
         args = RpcPayload.owned([])
 
-        result_hook = await hook.call([], args)
+        result_hook = hook.call([], args)
 
         assert isinstance(result_hook, ErrorStubHook)
         assert "not callable" in result_hook.error.message
@@ -205,9 +203,10 @@ class TestTargetStubHookNavigation:
         args = RpcPayload.owned([])
 
         # Navigate through nested properties
-        result_hook = await hook.call(["nested", "getValue"], args)
+        result_hook = hook.call(["nested", "getValue"], args)
 
-        assert isinstance(result_hook, PayloadStubHook)
+        # Now returns PromiseStubHook since call is sync but work is async
+        assert isinstance(result_hook, PromiseStubHook)
         result = await result_hook.pull()
         assert result.value == "nested_value"
 
@@ -219,46 +218,13 @@ class TestTargetStubHookNavigation:
         args = RpcPayload.owned([])
 
         # Try to navigate through non-existent property
-        result_hook = await hook.call(["missing", "method"], args)
+        result_hook = hook.call(["missing", "method"], args)
 
-        assert isinstance(result_hook, ErrorStubHook)
-        # The error comes from get_property raising not found
-        assert "not found" in result_hook.error.message.lower()
-
-    @pytest.mark.asyncio
-    async def test_invoke_method_on_non_rpc_target(self):
-        """Test invoking method on a non-RpcTarget object."""
-
-        class PlainObject:
-            def method(self):
-                return "plain result"
-
-        # Simulate navigating to a plain object
-        target = SimpleTarget()
-        target.plain = PlainObject()  # type: ignore[missing-attribute]
-        hook = TargetStubHook(target)
-        args = RpcPayload.owned([])
-
-        # This should work by calling the method directly
-        result_hook = await hook.call(["method"], args)
-        # Note: This will fail because SimpleTarget doesn't have "method"
-        # Let's test the error path
-        assert isinstance(result_hook, ErrorStubHook)
-
-    @pytest.mark.asyncio
-    async def test_invoke_async_method_on_plain_object(self):
-        """Test invoking async method on plain object (not RpcTarget)."""
-        # This tests the branch where we call a method directly on an object
-        # that isn't an RpcTarget
-
-        async def async_method():
-            return "async result"
-
-        class PlainClass:
-            method = async_method
-
-        # We can't easily test this without modifying TargetStubHook internals
-        # Skip for now as it's an edge case
+        # Now returns PromiseStubHook, error is in the resolved hook
+        assert isinstance(result_hook, PromiseStubHook)
+        resolved = await result_hook.future
+        assert isinstance(resolved, ErrorStubHook)
+        assert "not found" in resolved.error.message.lower()
 
     @pytest.mark.asyncio
     async def test_call_without_path(self):
@@ -267,7 +233,7 @@ class TestTargetStubHookNavigation:
         hook = TargetStubHook(target)
         args = RpcPayload.owned([])
 
-        result_hook = await hook.call([], args)
+        result_hook = hook.call([], args)
 
         assert isinstance(result_hook, ErrorStubHook)
         assert "without method name" in result_hook.error.message
@@ -280,10 +246,13 @@ class TestTargetStubHookNavigation:
         args = RpcPayload.owned([])
 
         # Call a method that doesn't exist
-        result_hook = await hook.call(["nonexistent"], args)
+        result_hook = hook.call(["nonexistent"], args)
 
-        assert isinstance(result_hook, ErrorStubHook)
-        assert isinstance(result_hook.error, RpcError)
+        # Now returns PromiseStubHook, error is in the resolved hook
+        assert isinstance(result_hook, PromiseStubHook)
+        resolved = await result_hook.future
+        assert isinstance(resolved, ErrorStubHook)
+        assert isinstance(resolved.error, RpcError)
 
     @pytest.mark.asyncio
     async def test_call_with_non_rpc_error(self):
@@ -293,10 +262,13 @@ class TestTargetStubHookNavigation:
         args = RpcPayload.owned([])
 
         # Call a method that raises ValueError
-        result_hook = await hook.call(["fail"], args)
+        result_hook = hook.call(["fail"], args)
 
-        assert isinstance(result_hook, ErrorStubHook)
-        assert "Target call failed" in result_hook.error.message
+        # Now returns PromiseStubHook, error is in the resolved hook
+        assert isinstance(result_hook, PromiseStubHook)
+        resolved = await result_hook.future
+        assert isinstance(resolved, ErrorStubHook)
+        assert "Target call failed" in resolved.error.message
 
 
 class TestTargetStubHookProperty:
@@ -391,64 +363,6 @@ class TestTargetStubHookDisposal:
         assert dup is hook
 
 
-class TestRpcImportHook:
-    """Test RpcImportHook behavior."""
-
-    @pytest.mark.asyncio
-    async def test_import_hook_call(self):
-        """Test calling through an import hook."""
-        session = RpcSession()
-        hook = RpcImportHook(session=session, import_id=1)
-        args = RpcPayload.owned([])
-
-        # This will raise NotImplementedError because session doesn't implement send_pipeline_call
-        with pytest.raises(NotImplementedError, match="send_pipeline_call"):
-            await hook.call(["method"], args)
-
-    def test_import_hook_get(self):
-        """Test getting property through import hook."""
-        session = RpcSession()
-        hook = RpcImportHook(session=session, import_id=1)
-
-        # This will raise NotImplementedError
-        with pytest.raises(NotImplementedError, match="send_pipeline_get"):
-            hook.get(["property"])
-
-    @pytest.mark.asyncio
-    async def test_import_hook_pull(self):
-        """Test pulling value through import hook."""
-        session = RpcSession()
-        hook = RpcImportHook(session=session, import_id=1)
-
-        # This will raise NotImplementedError
-        with pytest.raises(NotImplementedError, match="pull_import"):
-            await hook.pull()
-
-    def test_import_hook_dispose(self):
-        """Test disposing import hook releases it from session."""
-        session = RpcSession()
-        hook = RpcImportHook(session=session, import_id=1)
-
-        # Add to session imports
-        session._imports[1] = hook
-
-        assert hook.ref_count == 1
-        # When refcount hits 0, it calls session.release_import which also disposes
-        hook.dispose()
-        # Import should be released from session
-        assert 1 not in session._imports
-
-    def test_import_hook_dup(self):
-        """Test duplicating import hook."""
-        session = RpcSession()
-        hook = RpcImportHook(session=session, import_id=1)
-
-        assert hook.ref_count == 1
-        dup = hook.dup()
-        assert hook.ref_count == 2
-        assert dup is hook
-
-
 class TestPromiseStubHook:
     """Test PromiseStubHook behavior."""
 
@@ -460,15 +374,13 @@ class TestPromiseStubHook:
         args = RpcPayload.owned([])
 
         # Call returns a new promise hook
-        result_hook = await hook.call(["method"], args)
+        result_hook = hook.call(["method"], args)
         assert isinstance(result_hook, PromiseStubHook)
 
         # The call is chained - resolve the original future
         inner_payload = RpcPayload.owned(lambda: "result")
         inner_hook = PayloadStubHook(inner_payload)
         future.set_result(inner_hook)
-
-        # The chained promise should also work (though we can't easily await it here)
 
     def test_promise_hook_get(self):
         """Test getting property through promise hook."""

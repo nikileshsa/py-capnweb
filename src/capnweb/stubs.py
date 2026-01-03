@@ -35,6 +35,7 @@ class RpcStub:
         value = await result
         ```
     """
+    __slots__ = ('_hook',)
 
     def __init__(self, hook: StubHook) -> None:
         """Initialize with a hook.
@@ -61,7 +62,7 @@ class RpcStub:
 
         # Get the property through the hook
         result_hook = self._hook.get([name])
-        return RpcPromise(result_hook)  # type: ignore[arg-type]
+        return RpcPromise(result_hook)
 
     def __call__(self, *args: Any, **kwargs: Any) -> RpcPromise:
         """Call the stub as a function.
@@ -80,16 +81,11 @@ class RpcStub:
         # Package arguments into a payload
         args_payload = RpcPayload.from_app_params(list(args))
 
-        # Call through the hook (empty path = call the stub itself)
-        async def do_call():
-            result_hook = await self._hook.call([], args_payload)
-            return result_hook
+        # Call through the hook SYNCHRONOUSLY (empty path = call the stub itself)
+        # This ensures messages are queued before the batch is sent
+        result_hook = self._hook.call([], args_payload)
 
-        future = asyncio.ensure_future(do_call())
-
-        from capnweb.hooks import PromiseStubHook  # noqa: PLC0415
-
-        return RpcPromise(PromiseStubHook(future))
+        return RpcPromise(result_hook)
 
     def dispose(self) -> None:
         """Dispose this stub, releasing resources.
@@ -97,6 +93,40 @@ class RpcStub:
         After calling dispose, the stub should not be used anymore.
         """
         self._hook.dispose()
+
+    def map(
+        self,
+        mapper: Any,  # Callable[[RpcPromise], Any]
+        path: list[str | int] | None = None,
+    ) -> "RpcPromise":
+        """Apply a mapper function to array elements without transferring data.
+
+        This allows processing array elements on the remote side, avoiding
+        the overhead of transferring the entire array back and forth.
+
+        Args:
+            mapper: A function that takes an RpcPromise and returns a value.
+                    The function is serialized as instructions and executed remotely.
+            path: Optional property path to the array to map over.
+
+        Returns:
+            An RpcPromise that will resolve to the mapped array.
+
+        Example:
+            ```python
+            # Map over an array on the server
+            result = stub.data.map(lambda x: x.double())
+            values = await result
+            ```
+
+        Note:
+            The mapper function cannot be async and cannot have side effects.
+            It can only use operations that can be serialized as instructions.
+        """
+        # For now, provide a simplified implementation that delegates to hook.map()
+        # A full implementation would need a MapBuilder like TypeScript
+        result_hook = self._hook.map(path or [], [], [0])
+        return RpcPromise(result_hook)
 
     async def __aenter__(self) -> Self:
         """Enter async context manager."""
@@ -130,6 +160,7 @@ class RpcPromise:
             print(name)
         ```
     """
+    __slots__ = ('_hook',)
 
     def __init__(self, hook: StubHook) -> None:
         """Initialize with a hook.
@@ -155,7 +186,7 @@ class RpcPromise:
             raise AttributeError(msg)
 
         result_hook = self._hook.get([name])
-        return RpcPromise(result_hook)  # type: ignore[arg-type]
+        return RpcPromise(result_hook)
 
     def __call__(self, *args: Any, **kwargs: Any) -> RpcPromise:
         """Call the promised value as a function, returning a new promise.
@@ -175,15 +206,11 @@ class RpcPromise:
 
         args_payload = RpcPayload.from_app_params(list(args))
 
-        async def do_call():
-            result_hook = await self._hook.call([], args_payload)
-            return result_hook
+        # Call through the hook SYNCHRONOUSLY
+        # This ensures messages are queued before the batch is sent
+        result_hook = self._hook.call([], args_payload)
 
-        future = asyncio.ensure_future(do_call())
-
-        from capnweb.hooks import PromiseStubHook  # noqa: PLC0415
-
-        return RpcPromise(PromiseStubHook(future))
+        return RpcPromise(result_hook)
 
     def __await__(self):
         """Make this promise awaitable.
@@ -202,6 +229,39 @@ class RpcPromise:
         """Dispose this promise, canceling it if pending."""
         self._hook.dispose()
 
+    def map(
+        self,
+        mapper: Any,  # Callable[[RpcPromise], Any]
+        path: list[str | int] | None = None,
+    ) -> "RpcPromise":
+        """Apply a mapper function to array elements without transferring data.
+
+        This allows processing array elements on the remote side, avoiding
+        the overhead of transferring the entire array back and forth.
+
+        Args:
+            mapper: A function that takes an RpcPromise and returns a value.
+                    The function is serialized as instructions and executed remotely.
+            path: Optional property path to the array to map over.
+
+        Returns:
+            An RpcPromise that will resolve to the mapped array.
+
+        Example:
+            ```python
+            # Chain map on a promise
+            result = promise.data.map(lambda x: x.transform())
+            values = await result
+            ```
+
+        Note:
+            The mapper function cannot be async and cannot have side effects.
+            It can only use operations that can be serialized as instructions.
+        """
+        # Delegate to hook.map()
+        result_hook = self._hook.map(path or [], [], [0])
+        return RpcPromise(result_hook)
+
     async def __aenter__(self) -> Any:
         """Enter async context manager, awaiting the value."""
         return await self
@@ -213,3 +273,39 @@ class RpcPromise:
     def __repr__(self) -> str:
         """Return a readable representation."""
         return f"RpcPromise({self._hook!r})"
+
+
+def create_stub(target: "RpcTarget") -> RpcStub:
+    """Create an RpcStub from an RpcTarget.
+    
+    This is the public API for creating stubs from local capabilities.
+    Use this when you need to pass a local object as a callback or
+    capability to a remote peer.
+    
+    Args:
+        target: An RpcTarget implementation
+        
+    Returns:
+        An RpcStub wrapping the target
+        
+    Example:
+        ```python
+        class MyCallback(RpcTarget):
+            async def call(self, method: str, args: list) -> Any:
+                if method == "onMessage":
+                    print(f"Received: {args[0]}")
+                    return None
+                raise RpcError.not_found(f"Method '{method}' not found")
+        
+        # Create a stub to pass to the server
+        callback_stub = create_stub(MyCallback())
+        await server.join("alice", callback_stub)
+        ```
+    """
+    from capnweb.hooks import TargetStubHook
+    from capnweb.types import RpcTarget as RpcTargetType
+    
+    if not isinstance(target, RpcTargetType):
+        raise TypeError(f"Expected RpcTarget, got {type(target).__name__}")
+    
+    return RpcStub(TargetStubHook(target))

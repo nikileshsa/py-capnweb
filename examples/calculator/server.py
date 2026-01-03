@@ -1,44 +1,72 @@
+"""Simple calculator server using HTTP batch RPC.
+
+Run:
+    uv run python examples/calculator/server.py
+"""
+
 import asyncio
 from typing import Any
 
+from aiohttp import web
+
+from capnweb.batch import aiohttp_batch_rpc_handler
 from capnweb.error import RpcError
-from capnweb.server import Server, ServerConfig
 from capnweb.types import RpcTarget
 
 
 class Calculator(RpcTarget):
+    """A simple calculator that supports basic arithmetic."""
+
     async def call(self, method: str, args: list[Any]) -> Any:
+        """Handle RPC method calls."""
         match method:
             case "add":
                 return args[0] + args[1]
             case "subtract":
                 return args[0] - args[1]
+            case "multiply":
+                return args[0] * args[1]
+            case "divide":
+                if args[1] == 0:
+                    raise RpcError.bad_request("Division by zero")
+                return args[0] / args[1]
             case _:
-                msg = f"Method {method} not found"
-                raise RpcError.not_found(msg)
+                raise RpcError.not_found(f"Method '{method}' not found")
 
-    async def get_property(self, property: str) -> Any:
-        msg = "Property access not implemented"
-        raise RpcError.not_found(msg)
+    async def get_property(self, name: str) -> Any:
+        """Handle property access."""
+        raise RpcError.not_found(f"Property '{name}' not found")
 
 
 async def main() -> None:
-    config = ServerConfig(host="127.0.0.1", port=8080)
-    server = Server(config)
+    """Run the calculator server."""
+    calculator = Calculator()
 
-    # Register the main capability
-    server.register_capability(0, Calculator())
+    # Create aiohttp app with batch RPC handler
+    async def rpc_handler(request: web.Request) -> web.Response:
+        return await aiohttp_batch_rpc_handler(request, calculator)
 
-    await server.start()
+    app = web.Application()
+    app.router.add_post("/rpc/batch", rpc_handler)
 
-    print("Calculator server listening on http://127.0.0.1:8080/rpc/batch")
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-    # Keep running
+    site = web.TCPSite(runner, "127.0.0.1", 8080)
+    await site.start()
+
+    print("🧮 Calculator server running on http://127.0.0.1:8080")
+    print("   Endpoint: http://127.0.0.1:8080/rpc/batch")
+    print()
+    print("Run client with: uv run python examples/calculator/client.py")
+    print("Press Ctrl+C to stop")
+
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        await server.stop()
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
