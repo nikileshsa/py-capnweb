@@ -175,7 +175,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
     
     transport = WebSocketServerTransport(ws)
-    session = BidirectionalSession(transport, chat_server)
+    session = BidirectionalSession(transport, local_main=chat_server)
     session.start()
     
     async for msg in ws:
@@ -205,50 +205,39 @@ if __name__ == "__main__":
 ```python
 import asyncio
 from typing import Any
-from capnweb import RpcTarget, RpcError, RpcStub, BidirectionalSession, create_stub
-from capnweb.ws_transport import WebSocketClientTransport
+from capnweb import RpcTarget, RpcError, create_stub
+from capnweb.ws_session import WebSocketRpcClient
 
 class ChatCallback(RpcTarget):
     """Receives messages from server."""
     
-    async def call(self, method: str, args: list[Any]) -> Any:
-        if method == "onMessage":
-            msg = args[0]
-            print(f"📨 {msg['from']}: {msg['text']}")
-            return None
-        raise RpcError.not_found(f"Method '{method}' not found")
-
-    async def get_property(self, name: str) -> Any:
-        raise RpcError.not_found(f"Property '{name}' not found")
+    def onMessage(self, msg: dict) -> None:
+        print(f"📨 {msg['from']}: {msg['text']}")
 
 async def main():
-    # Connect to server
-    transport = WebSocketClientTransport("ws://127.0.0.1:8080/rpc/ws")
-    await transport.connect()
-    
     callback = ChatCallback()
-    session = BidirectionalSession(transport, callback)
-    session.start()
     
-    server = RpcStub(session.get_main_stub())
-    
-    # Create a stub from our callback to pass to server
-    callback_stub = create_stub(callback)
-    
-    # Join the chat
-    result = await server.join("Alice", callback_stub)
-    print(f"Joined: {result}")
-    
-    # Send a message (will be broadcast back to us)
-    await server.sendMessage("Alice", "Hello everyone!")
-    
-    await asyncio.sleep(0.5)  # Wait for broadcast
-    
-    # Leave
-    await server.leave("Alice")
-    
-    await session.stop()
-    await transport.close()
+    async with WebSocketRpcClient(
+        "ws://127.0.0.1:8080/rpc/ws",
+        local_main=callback
+    ) as client:
+        # Get server's main capability
+        server = client.get_main_stub()
+        
+        # Create a stub from our callback to pass to server
+        callback_stub = create_stub(callback)
+        
+        # Join the chat
+        result = await server.join("Alice", callback_stub)
+        print(f"Joined: {result}")
+        
+        # Send a message (will be broadcast back to us)
+        await server.sendMessage("Alice", "Hello everyone!")
+        
+        await asyncio.sleep(0.5)  # Wait for broadcast
+        
+        # Leave
+        await server.leave("Alice")
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -339,7 +328,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     transport = WebSocketServerTransport(ws)
-    session = BidirectionalSession(transport, gateway)
+    session = BidirectionalSession(transport, local_main=gateway)
     session.start()
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
@@ -364,12 +353,11 @@ if __name__ == "__main__":
 
 ```python
 import asyncio
-from capnweb import UnifiedClient, UnifiedClientConfig, RpcError
+from capnweb import RpcError
+from capnweb.ws_session import WebSocketRpcClient
 
 async def main():
-    config = UnifiedClientConfig(url="ws://127.0.0.1:8080/rpc/ws")
-    
-    async with UnifiedClient(config) as client:
+    async with WebSocketRpcClient("ws://127.0.0.1:8080/rpc/ws") as client:
         main_stub = client.get_main_stub()
         
         # Create account with $1000
@@ -460,4 +448,4 @@ except RpcError as e:
 
 - **GitHub Issues**: https://github.com/nikileshsa/capnweb-python/issues
 - **Examples**: See the `examples/` directory for 10 complete examples
-- **Tests**: The test suite (744 tests) has many usage examples
+- **Tests**: The test suite (1166 tests) has many usage examples

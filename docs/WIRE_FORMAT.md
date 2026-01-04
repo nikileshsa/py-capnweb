@@ -94,24 +94,21 @@ evaluateImpl(value):
 4. **Strict error handling**: If an array starts with a known tag but doesn't match
    the expected structure, it throws an error rather than treating it as data.
 
-## Python Implementation Notes
+## Python Implementation
 
 ### wire.py - `wire_expression_from_json`
 
-This function should NOT try to distinguish between application data and wire expressions.
-It receives data that has ALREADY been through the wire, so:
-- Unescaped arrays ARE special forms (or errors)
-- Escaped arrays `[[...]]` should be unwrapped
-
-The current Python implementation incorrectly tries to handle both escaped and unescaped
-arrays, leading to complex heuristics.
+Converts JSON wire format to Python wire expression types:
+- Unescaped arrays with known tags → special forms
+- Escaped arrays `[[...]]` → unwrapped to application arrays
+- Unknown tags → treated as regular arrays (lenient parsing)
 
 ### parser.py - `Parser._parse_value`
 
-This is the Python equivalent of TypeScript's `Evaluator.evaluateImpl`. It should:
-1. Handle escaped arrays by unwrapping
-2. Validate special form structure before parsing
-3. Throw errors for malformed special forms
+The Python equivalent of TypeScript's `Evaluator.evaluateImpl`:
+1. Handles escaped arrays by unwrapping
+2. Validates special form structure before parsing
+3. Converts wire types to Python types (e.g., `WireDate` → `datetime`)
 
 ## Wire Expression Types Summary
 

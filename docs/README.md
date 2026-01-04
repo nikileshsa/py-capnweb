@@ -134,7 +134,7 @@ Cap'n Web is a capability-based RPC protocol that provides:
 - TypeScript interoperability
 - Structured error handling with code propagation
 - Reference counting and resource management
-- **744 tests, 70% coverage**
+- **1166 tests** (including 420 interop tests)
 
 ## Examples
 
@@ -155,7 +155,7 @@ Cap'n Web is a capability-based RPC protocol that provides:
 
 This implementation follows the [Cap'n Web protocol specification](https://github.com/cloudflare/capnweb/blob/main/protocol.md).
 
-**Compatibility:** 100% with TypeScript reference implementation
+**Compatibility:** Tested against TypeScript capnweb 0.4.0
 
 ## Community
 
