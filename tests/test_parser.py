@@ -316,21 +316,32 @@ class TestParseError:
 class TestParseInvalidExpressions:
     """Test parsing invalid or unsupported expressions."""
 
-    def test_parse_import_expression_returns_error(self):
-        """Test that import expressions in received data return error stub."""
+    def test_parse_import_expression_resolves_export(self):
+        """Test that import expressions resolve to our export table per protocol.md."""
         transport_a, transport_b = create_transport_pair()
-        session = BidirectionalSession(transport_a, None)
+        session = BidirectionalSession(transport_a, "local-main")
         parser = Parser(importer=session)
 
-        # ["import", 1] should not appear in received data
-        wire_value = ["import", 1]
+        # The sender references our exported main (id 0)
+        wire_value = ["import", 0]
         result = parser.parse(wire_value)
 
-        # Should return an error stub
+        assert isinstance(result.value, RpcStub)
+        assert isinstance(result.value._hook, PayloadStubHook)
+
+    def test_parse_import_expression_unknown_export_returns_error(self):
+        """Unknown import IDs should return an error stub."""
+        transport_a, transport_b = create_transport_pair()
+        session = BidirectionalSession(transport_a, "local-main")
+        parser = Parser(importer=session)
+
+        wire_value = ["import", 123]
+        result = parser.parse(wire_value)
+
         assert isinstance(result.value, RpcStub)
         hook = result.value._hook
         assert isinstance(hook, ErrorStubHook)
-        assert "should not appear in parse input" in hook.error.message
+        assert "No such entry on exports table" in hook.error.message
 
     def test_parse_pipeline_expression_returns_error(self):
         """Test that pipeline expressions in parse input return error stub."""

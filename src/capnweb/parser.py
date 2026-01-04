@@ -29,7 +29,7 @@ from capnweb.hooks import ErrorStubHook
 from capnweb.payload import RpcPayload
 from capnweb.stubs import RpcPromise, RpcStub
 from capnweb.value_codec import ValueCodecOptions
-from capnweb.wire import WireError, WireExport, is_int_not_bool as _is_int_not_bool
+from capnweb.wire import WireError, WireExport, WireImport, is_int_not_bool as _is_int_not_bool
 from capnweb.wire import WirePromise as WirePromiseType
 
 if TYPE_CHECKING:
@@ -208,15 +208,21 @@ class Parser:
                 elif tag == "nan":
                     return float("nan")
                 
-                elif tag in ("import", "pipeline"):
-                    # These reference OUR exports (sender is passing our object back)
+                elif tag == "import":
+                    # "import" references OUR exports (sender is passing our object back)
+                    # Per protocol.md, this can appear in received values.
+                    if len(value) == 2 and _is_int_not_bool(value[1]):
+                        return self._parse_import(value)
+                    # Malformed import - fall through to regular array handling
+
+                elif tag == "pipeline":
+                    # "pipeline" is an expression form and is not supported in Parser.parse()
                     if len(value) >= 2 and len(value) <= 4 and _is_int_not_bool(value[1]):
-                        # For now, treat as error - session handles these in push messages
                         error = RpcError.bad_request(
-                            f"{tag} expressions should not appear in parse input"
+                            "Pipeline expressions should not appear in parse input"
                         )
                         return RpcStub(ErrorStubHook(error))
-                    # Fall through to error
+                    # Fall through to regular array handling
                 
                 elif tag == "remap":
                     # ["remap", importId, propertyPath, captures, instructions]
@@ -286,20 +292,23 @@ class Parser:
         """Parse an import expression.
 
         When we receive ["import", id], it means the remote side is referencing
-        a capability we exported to them. This shouldn't normally appear in
-        parse input - it's typically used in serialization.
+        a capability we exported to them (from their perspective it's an import,
+        from ours it's an export).
 
         Args:
             wire_expr: ["import", import_id]
 
         Returns:
-            An error stub (imports shouldn't appear in received data)
+            An RpcStub wrapping our exported capability, or an error stub if missing.
         """
 
-        error = RpcError.bad_request(
-            "Import expressions should not appear in parse input"
-        )
-        return RpcStub(ErrorStubHook(error))
+        wire_import = WireImport.from_json(wire_expr)
+        export_id = wire_import.import_id
+        hook = self.importer.get_export(export_id)
+        if hook is None:
+            error = RpcError.bad_request(f"No such entry on exports table: {export_id}")
+            return RpcStub(ErrorStubHook(error))
+        return RpcStub(hook.dup())
 
     def _parse_promise(self, wire_expr: list[Any]) -> Any:
         """Parse a promise expression.

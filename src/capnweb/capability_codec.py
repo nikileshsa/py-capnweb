@@ -204,11 +204,14 @@ class CapabilityCodec:
             hook = self.importer.import_exported_capability(value.id)
             return RpcStub(hook)
 
-        # ImportRef should generally not appear in user payloads;
-        # treat it as an error stub so callers can't accidentally use it.
         if isinstance(value, ImportRef):
-            err = RpcError.bad_request("ImportRef should not appear in received values")
-            return RpcStub(ErrorStubHook(err))
+            if self.importer is None:
+                raise RuntimeError("Cannot decode ImportRef without importer")
+            hook = self.importer.get_export(value.id)
+            if hook is None:
+                err = RpcError.bad_request(f"Unknown export id referenced by ImportRef: {value.id}")
+                return RpcStub(ErrorStubHook(err))
+            return RpcStub(hook)
 
         if isinstance(value, PromiseRef):
             if self.importer is None:
