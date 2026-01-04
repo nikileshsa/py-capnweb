@@ -1,29 +1,74 @@
 # Capability Security Examples
 
 This directory contains examples demonstrating the **Object Capability Security Model** 
-implemented in Cap'n Web. Each example showcases a key security property.
+implemented in Cap'n Web.
+
+## Bank Account Example (Capability Attenuation)
+
+Demonstrates how capabilities can be **attenuated** (reduced) to provide limited access:
+- **Full Account** - Can deposit, withdraw, check balance, freeze
+- **Read-Only View** - Can only check balance (deposit/withdraw blocked)
+- **Limited Withdrawal** - Can withdraw up to a limit, then blocked
+
+### Running the Example
+
+**Step 1: Start the server**
+
+```bash
+cd capnweb-python
+uv run python examples/capability-security/bank_account/server.py
+```
+
+**Expected output:**
+```
+INFO:__main__:============================================================
+INFO:__main__:BANK SERVER - Capability Attenuation Demo
+INFO:__main__:============================================================
+INFO:__main__:
+INFO:__main__:Security Properties Demonstrated:
+INFO:__main__:  - ATTENUATION: Derived caps have fewer permissions
+INFO:__main__:  - POLA: Grant only needed permissions
+INFO:__main__:  - REVOCATION: Freeze accounts to revoke access
+INFO:__main__:
+INFO:__main__:Endpoint: ws://127.0.0.1:8080/rpc/ws
+INFO:__main__:
+INFO:__main__:Run client: python examples/capability-security/bank_account/client.py
+```
+
+**Step 2: Run the client (in a new terminal)**
+
+```bash
+cd capnweb-python
+uv run python examples/capability-security/bank_account/client.py
+```
+
+**Expected output:**
+```
+Created account
+Initial balance: $1000.0
+After deposit: $1500.0
+Read-only view balance: $1500.0
+Read-only deposit blocked: permission_denied
+Limited withdrawal: $50.0, remaining limit: $150.0
+Limit exceeded blocked: permission_denied
+```
+
+### What the Example Demonstrates
+
+1. **Create Account** - Full capability with all permissions
+2. **Deposit/Withdraw** - Normal operations work
+3. **Create Read-Only View** - Attenuated capability that can only read
+4. **Read-Only Deposit Blocked** - `permission_denied` error
+5. **Create Limited Withdrawal** - Attenuated capability with $200 limit
+6. **Exceed Limit Blocked** - `permission_denied` when limit exceeded
 
 ## Key Security Properties
 
-| Property | Example | Description |
-|----------|---------|-------------|
-| **Attenuation** | `bank_account/` | Derived capabilities have reduced permissions |
-| **Revocation** | `revocable_access/` | Capabilities can be invalidated at any time |
-| **Confinement** | `secure_storage/` | Capabilities cannot be forged or guessed |
-| **POLA** | `least_authority/` | Only grant the minimum needed capabilities |
-| **Isolation** | `multi_tenant/` | Tenants are completely isolated from each other |
-
-## Running the Examples
-
-Each example has a `server.py` and `client.py`. Run the server first:
-
-```bash
-# Terminal 1: Start the server
-python examples/capability-security/bank_account/server.py
-
-# Terminal 2: Run the client
-python examples/capability-security/bank_account/client.py
-```
+| Property | Description |
+|----------|-------------|
+| **Attenuation** | Derived capabilities have reduced permissions |
+| **POLA** | Only grant the minimum needed permissions |
+| **Revocation** | Freeze accounts to revoke all access |
 
 ## Security Model Overview
 
