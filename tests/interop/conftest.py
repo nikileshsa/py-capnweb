@@ -95,8 +95,10 @@ class ServerProcess:
 
 def start_ts_server(port: int | None = None) -> ServerProcess:
     """Start the TypeScript test server."""
+    print(f"[DEBUG] start_ts_server called", flush=True)
     if port is None:
         port = find_free_port()
+    print(f"[DEBUG] Using port {port}", flush=True)
     
     # Check if npm install has been run
     node_modules = INTEROP_DIR / "node_modules"
@@ -105,6 +107,7 @@ def start_ts_server(port: int | None = None) -> ServerProcess:
             "Run 'npm install' in tests/interop/ first"
         )
     
+    print(f"[DEBUG] Starting npx tsx ts_server.ts {port}", flush=True)
     # Use DEVNULL to prevent pipe buffer deadlock in CI
     # (subprocess blocks if pipe buffer fills up ~64KB)
     proc = subprocess.Popen(
@@ -113,11 +116,14 @@ def start_ts_server(port: int | None = None) -> ServerProcess:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    print(f"[DEBUG] Process started with PID {proc.pid}", flush=True)
     
+    print(f"[DEBUG] Waiting for port {port}...", flush=True)
     if not wait_for_port_sync(port, timeout=15.0):
         proc.kill()
         proc.wait()
         raise RuntimeError(f"TypeScript server failed to start on port {port}")
+    print(f"[DEBUG] Port {port} is ready", flush=True)
     
     return ServerProcess(process=proc, port=port, name="TypeScript")
 
