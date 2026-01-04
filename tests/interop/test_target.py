@@ -119,6 +119,46 @@ class TestTarget(RpcTarget):
         elif method == "getList":
             return [1, 2, 3, 4, 5]
         
+        # Special forms support
+        elif method == "echoBytes":
+            return args[0]  # bytes pass through
+        
+        elif method == "echoDate":
+            return args[0]  # datetime pass through
+        
+        elif method == "echoBigInt":
+            return args[0]  # int pass through (Python uses int for bigint)
+        
+        elif method == "returnInfinity":
+            return float('inf')
+        
+        elif method == "returnNegativeInfinity":
+            return float('-inf')
+        
+        elif method == "returnNaN":
+            return float('nan')
+        
+        elif method == "makeBytes":
+            import base64
+            return base64.b64decode(args[0])
+        
+        elif method == "makeDate":
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(args[0] / 1000, tz=timezone.utc)
+        
+        elif method == "makeBigInt":
+            return int(args[0])
+        
+        elif method == "getTimestamp":
+            dt = args[0]
+            return int(dt.timestamp() * 1000)
+        
+        elif method == "getBytesLength":
+            return len(args[0])
+        
+        elif method == "getBigIntString":
+            return str(args[0])
+        
         elif method == "registerCallback":
             # Store callback for later use
             self._callback = args[0]

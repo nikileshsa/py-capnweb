@@ -84,6 +84,55 @@ class TestTarget extends RpcTarget {
     return value;
   }
   
+  // Special forms support
+  echoBytes(data: Uint8Array): Uint8Array {
+    return data;
+  }
+  
+  echoDate(date: Date): Date {
+    return date;
+  }
+  
+  echoBigInt(value: bigint): bigint {
+    return value;
+  }
+  
+  returnInfinity(): number {
+    return Infinity;
+  }
+  
+  returnNegativeInfinity(): number {
+    return -Infinity;
+  }
+  
+  returnNaN(): number {
+    return NaN;
+  }
+  
+  makeBytes(base64: string): Uint8Array {
+    return Buffer.from(base64, 'base64');
+  }
+  
+  makeDate(timestamp: number): Date {
+    return new Date(timestamp);
+  }
+  
+  makeBigInt(value: string): bigint {
+    return BigInt(value);
+  }
+  
+  getTimestamp(date: Date): number {
+    return date.getTime();
+  }
+  
+  getBytesLength(data: Uint8Array): number {
+    return data.length;
+  }
+  
+  getBigIntString(value: bigint): string {
+    return value.toString();
+  }
+  
   add(a: number, b: number): number {
     return a + b;
   }
