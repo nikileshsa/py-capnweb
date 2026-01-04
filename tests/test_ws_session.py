@@ -6,6 +6,8 @@ These tests verify the full bidirectional RPC functionality without mocks.
 import asyncio
 import pytest
 
+from capnweb.payload import RpcPayload
+from capnweb.stubs import RpcStub
 from capnweb.types import RpcTarget
 from capnweb.ws_session import WebSocketRpcClient, WebSocketRpcServer
 
@@ -193,13 +195,23 @@ class TestWebSocketRpcBidirectional:
             """Service that calls back to client."""
             
             def __init__(self):
-                self.client_callback = None
+                self.client_callback: RpcStub | None = None
             
             async def call(self, method: str, args: list) -> any:
                 if method == "register_callback":
-                    # In a real implementation, we'd store the capability
-                    # For now, just acknowledge
+                    self.client_callback = args[0]
                     return "registered"
+                elif method == "trigger_callback":
+                    if self.client_callback is None:
+                        return "no callback"
+                    hook = (
+                        self.client_callback._hook
+                        if isinstance(self.client_callback, RpcStub)
+                        else self.client_callback
+                    )
+                    result_hook = hook.call(["notify"], RpcPayload.owned(["ping"]))
+                    result = await result_hook.pull()
+                    return result.value
                 elif method == "echo":
                     return args[0]
                 raise ValueError(f"Unknown method: {method}")
@@ -213,18 +225,36 @@ class TestWebSocketRpcBidirectional:
         try:
             # Client with its own capability
             class ClientCallback(RpcTarget):
+                def __init__(self):
+                    self.notifications: list[str] = []
+
                 async def call(self, method: str, args: list) -> any:
                     if method == "notify":
+                        self.notifications.append(args[0])
                         return f"Got: {args[0]}"
                     raise ValueError(f"Unknown method: {method}")
                 
                 def get_property(self, name: str) -> any:
                     raise AttributeError(f"Unknown property: {name}")
             
+            local = ClientCallback()
+
             async with WebSocketRpcClient(
                 "ws://localhost:9010/rpc",
-                local_main=ClientCallback()
+                local_main=local,
             ) as client:
+                assert client._session is not None
+
+                # Send the client's local main capability to the server as a stub
+                callback_stub = RpcStub(client._session.get_export(0).dup())
+                result = await client.call(0, "register_callback", [callback_stub])
+                assert result == "registered"
+
+                # Now have server call back into the client via the stored capability
+                result = await client.call(0, "trigger_callback", [])
+                assert result == "Got: ping"
+                assert local.notifications == ["ping"]
+
                 # Simple call to verify connection works
                 result = await client.call(0, "echo", ["test"])
                 assert result == "test"
