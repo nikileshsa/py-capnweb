@@ -67,22 +67,11 @@ jobs:
         working-directory: tests/interop
         run: npm install
 
-      - name: Start Python server
-        run: |
-          uv run python tests/interop/py_server.py 19200 &
-          sleep 2
-
-      - name: Start TypeScript server
+      - name: Verify TypeScript setup
         working-directory: tests/interop
         run: |
-          npx tsx ts_server.ts 19100 &
-          sleep 2
+          ls -la node_modules/.bin/tsx || echo "tsx not found"
+          npx tsx --version
 
       - name: Run interop tests
         run: uv run pytest tests/interop/ -v --tb=short
-
-      - name: Cleanup servers
-        if: always()
-        run: |
-          pkill -f "py_server.py" || true
-          pkill -f "ts_server.ts" || true
