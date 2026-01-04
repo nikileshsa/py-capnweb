@@ -159,6 +159,12 @@ class TestTarget(RpcTarget):
         elif method == "getBigIntString":
             return str(args[0])
         
+        elif method == "slowMethod":
+            import asyncio
+            delay_ms = args[0]
+            await asyncio.sleep(delay_ms / 1000)
+            return f"slow result after {delay_ms}ms"
+        
         elif method == "registerCallback":
             # Store callback for later use
             self._callback = args[0]

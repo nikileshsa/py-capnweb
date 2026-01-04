@@ -137,6 +137,11 @@ class TestTarget extends RpcTarget {
     return a + b;
   }
   
+  async slowMethod(delayMs: number): Promise<string> {
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    return `slow result after ${delayMs}ms`;
+  }
+  
   greet(name: string): string {
     return `Hello, ${name}!`;
   }

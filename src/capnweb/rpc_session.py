@@ -1029,19 +1029,27 @@ class BidirectionalSession:
                 pass  # Treat as unhandled rejection
         self._on_broken_callbacks.clear()
         
-        # Reject all pending imports
+        # Reject all pending imports and dispose resolved ones
         for entry in list(self._imports.values()):
             if entry.resolution is None:
                 entry.reject(reason)
+            elif entry.resolution:
+                # Dispose resolved hooks to break reference cycles
+                entry.resolution.dispose()
+        self._imports.clear()
         
         # Dispose all exports
         for entry in list(self._exports.values()):
             entry.hook.dispose()
+        self._exports.clear()
         
         # Clear export events
         for event in self._export_events.values():
             event.set()  # Unblock any waiting handlers
         self._export_events.clear()
+        
+        # Clear reverse exports map
+        self._reverse_exports.clear()
     
     async def _send_abort_then_abort_transport(self, abort_msg: WireAbort, reason: Exception) -> None:
         """Send abort message (best-effort) and then abort the transport."""
