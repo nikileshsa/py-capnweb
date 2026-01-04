@@ -15,9 +15,8 @@ A complete Python implementation of the [Cap'n Web protocol](https://github.com/
 - **Bidirectional RPC** - Full peer-to-peer capability passing
 - **100% Interoperable** - Fully compatible with TypeScript reference implementation
 
-**Production-Ready:**
+**Beta Status:**
 - 744 tests passing, 70% coverage
-- 0 linting errors, 0 typing errors
 - Clean hook-based architecture
 - Full protocol compliance
 
@@ -37,12 +36,13 @@ A complete Python implementation of the [Cap'n Web protocol](https://github.com/
 ## Installation
 
 ```bash
-pip install capnweb
-# or
-uv add capnweb
+# Clone and install from source
+git clone https://github.com/nikileshsa/capnweb-python.git
+cd capnweb-python
+uv sync
 
 # For WebTransport support (optional):
-pip install capnweb[webtransport]
+uv pip install aioquic
 ```
 
 ## Quick Start
@@ -78,13 +78,16 @@ asyncio.run(main())
 **Client:**
 ```python
 import asyncio
-from capnweb import UnifiedClient, UnifiedClientConfig
+import aiohttp
+from capnweb.batch import new_http_batch_rpc_session
 
 async def main():
-    config = UnifiedClientConfig(url="http://localhost:8080/rpc/batch")
-    async with UnifiedClient(config) as client:
-        calc = client.get_main_stub()
-        result = await calc.add(5, 3)
+    async with aiohttp.ClientSession() as http:
+        stub = await new_http_batch_rpc_session(
+            "http://localhost:8080/rpc/batch", 
+            http_client=http
+        )
+        result = await stub.add(5, 3)
         print(f"5 + 3 = {result}")  # Output: 8
 
 asyncio.run(main())
@@ -117,9 +120,6 @@ await account.deposit(500.0)
 **Code Quality:**
 - ✅ 744 tests passing (100% success rate)
 - ✅ 70% test coverage
-- ✅ 0 linting errors (ruff)
-- ✅ 0 typing errors (pyright)
-- ✅ TypeScript interoperability verified
 
 ## Documentation
 
@@ -173,10 +173,6 @@ uv sync
 # Run tests
 uv run pytest
 
-# Run linting & type checking
-uv run ruff check
-uv run pyright
-
 # Run with coverage
 uv run pytest --cov=capnweb --cov-report=term-missing
 ```
@@ -185,14 +181,8 @@ uv run pytest --cov=capnweb --cov-report=term-missing
 
 This implementation follows the [Cap'n Web protocol specification](https://github.com/cloudflare/capnweb/blob/main/protocol.md).
 
-**Interoperability Testing:**
-Cross-implementation testing with TypeScript reference validates all combinations:
-- Python Server ↔ Python Client ✅
-- Python Server ↔ TypeScript Client ✅
-- TypeScript Server ↔ Python Client ✅
-- TypeScript Server ↔ TypeScript Client ✅
-
-Run interop tests: `cd interop && bash run_tests.sh`
+**Interoperability:**
+Designed to be compatible with the TypeScript reference implementation. Interop test suite available in `interop/` directory.
 
 ## Acknowledgments & Key Improvements from Original Fork
 
