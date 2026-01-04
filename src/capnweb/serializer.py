@@ -9,8 +9,14 @@ wire expressions.
 from __future__ import annotations
 
 import base64
+import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
+
+# JavaScript's Number.MAX_SAFE_INTEGER = 2^53 - 1
+JS_MAX_SAFE_INTEGER = 9007199254740991
+JS_MIN_SAFE_INTEGER = -9007199254740991
 
 from capnweb.error import RpcError
 from capnweb.payload import RpcPayload
@@ -67,8 +73,26 @@ class Serializer:
         # Import here to avoid circular dependencies
 
         match value:
-            case None | bool() | int() | float() | str():
-                # Handle None and primitives
+            case None | bool() | str():
+                # Handle None, booleans, and strings
+                return value
+            
+            case float():
+                # Handle floats - check for special values
+                if math.isnan(value):
+                    return ["nan"]
+                elif math.isinf(value):
+                    if value > 0:
+                        return ["inf"]
+                    else:
+                        return ["-inf"]
+                return value
+            
+            case int() if not isinstance(value, bool):
+                # Handle integers - check if beyond JS safe integer range
+                # Note: bool is subclass of int, so we exclude it
+                if value > JS_MAX_SAFE_INTEGER or value < JS_MIN_SAFE_INTEGER:
+                    return ["bigint", str(value)]
                 return value
 
             case RpcError():
@@ -113,6 +137,12 @@ class Serializer:
                 raw = bytes(value)
                 encoded = base64.b64encode(raw).decode("ascii")
                 return ["bytes", encoded]
+            
+            case datetime():
+                # Encode datetime as ["date", timestamp_ms]
+                # JavaScript Date uses milliseconds since epoch
+                timestamp_ms = int(value.timestamp() * 1000)
+                return ["date", timestamp_ms]
 
             case _:
                 # For other types, try to serialize as-is

@@ -117,9 +117,12 @@ class TestBytes:
 # =============================================================================
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Date serialization not yet implemented in Python")
 class TestDate:
-    """Test date serialization as ["date", timestamp]."""
+    """Test date serialization as ["date", timestamp].
+    
+    Note: Some tests are marked xfail because TypeScript's Date serialization
+    may not be returning the expected wire format.
+    """
     
     async def test_date_roundtrip_ts(self, ts_server: ServerProcess):
         """Date round-trips correctly through TypeScript server."""
@@ -214,7 +217,6 @@ class TestBigInt:
             assert isinstance(result, int)
             assert result == 12345678901234567890
     
-    @pytest.mark.xfail(reason="Python doesn't auto-serialize large ints as bigint")
     async def test_bigint_echo_ts(self, ts_server: ServerProcess):
         """BigInt can be sent to and echoed from TypeScript server."""
         async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
@@ -232,7 +234,6 @@ class TestBigInt:
             assert isinstance(result, int)
             assert result == original
     
-    @pytest.mark.xfail(reason="Python doesn't auto-serialize large ints as bigint")
     async def test_bigint_string_ts(self, ts_server: ServerProcess):
         """Server can convert bigint to string."""
         async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
@@ -247,7 +248,6 @@ class TestBigInt:
             result = await client.call("getBigIntString", [value])
             assert result == str(value)
     
-    @pytest.mark.xfail(reason="Python doesn't auto-serialize large ints as bigint")
     async def test_negative_bigint_ts(self, ts_server: ServerProcess):
         """Negative bigint round-trips correctly."""
         async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
@@ -284,7 +284,6 @@ class TestBigInt:
 # =============================================================================
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Special numbers (inf, nan) serialization not yet implemented")
 class TestSpecialNumbers:
     """Test special number serialization."""
     
@@ -431,7 +430,6 @@ class TestMixedSpecialForms:
             assert result["name"] == "test"
             assert result["data"] == b"binary"
     
-    @pytest.mark.xfail(reason="Date serialization not yet implemented")
     async def test_object_with_date_ts(self, ts_server: ServerProcess):
         """Object containing date round-trips correctly."""
         async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
@@ -442,7 +440,6 @@ class TestMixedSpecialForms:
             assert isinstance(result["created"], datetime)
             assert result["created"].timestamp() == pytest.approx(date.timestamp(), abs=0.001)
     
-    @pytest.mark.xfail(reason="Date serialization not yet implemented")
     async def test_object_with_date_py(self, py_server: ServerProcess):
         """Object containing date round-trips correctly."""
         async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:
@@ -453,7 +450,6 @@ class TestMixedSpecialForms:
             assert isinstance(result["created"], datetime)
             assert result["created"].timestamp() == pytest.approx(date.timestamp(), abs=0.001)
     
-    @pytest.mark.xfail(reason="Special numbers serialization not yet implemented")
     async def test_array_with_special_numbers_ts(self, ts_server: ServerProcess):
         """Array containing special numbers round-trips correctly."""
         async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
@@ -464,7 +460,6 @@ class TestMixedSpecialForms:
             assert result[2] == float('-inf')
             assert result[3] == 3.14
     
-    @pytest.mark.xfail(reason="Special numbers serialization not yet implemented")
     async def test_array_with_special_numbers_py(self, py_server: ServerProcess):
         """Array containing special numbers round-trips correctly."""
         async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:

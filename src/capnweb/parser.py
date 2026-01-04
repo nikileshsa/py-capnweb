@@ -29,7 +29,7 @@ from capnweb.hooks import ErrorStubHook
 from capnweb.payload import RpcPayload
 from capnweb.stubs import RpcPromise, RpcStub
 from capnweb.value_codec import ValueCodecOptions
-from capnweb.wire import WireError, WireExport, WireImport, is_int_not_bool as _is_int_not_bool
+from capnweb.wire import WireError, WireExport, WireImport, WireDate, is_int_not_bool as _is_int_not_bool
 from capnweb.wire import WirePromise as WirePromiseType
 
 if TYPE_CHECKING:
@@ -148,6 +148,11 @@ class Parser:
         # Handle None and primitives - pass through unchanged
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
+        
+        # Handle WireDate objects (from wire module pre-parsing)
+        if isinstance(value, WireDate):
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(value.timestamp / 1000, tz=timezone.utc)
 
         # Handle arrays - could be escaped arrays or special forms
         if isinstance(value, list):
