@@ -983,16 +983,19 @@ class BidirectionalSession:
         """
         if self._abort_reason is not None:
             return
-        
-        # Try to send abort message to peer
+
+        # Try to send abort message to peer.
+        # Spec intent: send ["abort", error] and then terminate the session.
+        # We therefore avoid aborting/closing the transport until after the
+        # best-effort abort message send has run.
         if send_abort:
             try:
                 error_msg = str(reason) if reason else "Unknown error"
                 abort_msg = WireAbort(WireError("abort", error_msg))
-                # Fire and forget - don't await
-                asyncio.create_task(self._send_abort_message(abort_msg))
+                asyncio.create_task(self._send_abort_then_abort_transport(abort_msg, reason))
             except Exception:
-                pass  # Ignore errors sending abort
+                # Fall back to immediate transport abort below
+                send_abort = False
         
         self._abort_reason = reason
         self._abort_event.set()
@@ -1001,8 +1004,10 @@ class BidirectionalSession:
         if self._on_batch_done and not self._on_batch_done.done():
             self._on_batch_done.set_exception(reason)
         
-        # Call transport abort handler
-        if hasattr(self.transport, 'abort') and self.transport.abort:
+        # Call transport abort handler.
+        # If we scheduled send_abort_then_abort_transport, it will abort the
+        # transport after sending; otherwise abort immediately.
+        if not send_abort and hasattr(self.transport, 'abort') and self.transport.abort:
             try:
                 self.transport.abort(reason)
             except Exception:
@@ -1030,13 +1035,19 @@ class BidirectionalSession:
             event.set()  # Unblock any waiting handlers
         self._export_events.clear()
     
-    async def _send_abort_message(self, abort_msg: WireAbort) -> None:
-        """Send abort message (separate task to avoid blocking)."""
+    async def _send_abort_then_abort_transport(self, abort_msg: WireAbort, reason: Exception) -> None:
+        """Send abort message (best-effort) and then abort the transport."""
         try:
             batch = serialize_wire_batch([abort_msg])
             await self.transport.send(batch)
         except Exception:
-            pass  # Ignore errors
+            pass
+        finally:
+            if hasattr(self.transport, 'abort') and self.transport.abort:
+                try:
+                    self.transport.abort(reason)
+                except Exception:
+                    pass
     
     # -------------------------------------------------------------------------
     # Importer protocol (for parsing capabilities we receive)

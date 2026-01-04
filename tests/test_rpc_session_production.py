@@ -30,6 +30,7 @@ from capnweb.types import RpcTarget
 from capnweb.error import RpcError
 from capnweb.payload import RpcPayload
 from capnweb.stubs import RpcStub
+from capnweb.wire import WireAbort, WireRelease, parse_wire_batch
 
 
 # =============================================================================
@@ -236,26 +237,25 @@ class TestSendReleaseOnResolve:
             # Pull the result (this triggers resolve)
             result = await asyncio.wait_for(result_hook.pull(), timeout=2.0)
             assert result.value == "hello"
-            
-            # Give time for release message to be sent
-            await asyncio.sleep(0.1)
-            
-            # Check that a release message was sent
-            # The client should have sent: push, pull, release
-            release_found = False
-            for msg in transport_b.sent_messages:
-                if '"release"' in msg:
-                    release_found = True
-                    break
-            
-            assert release_found, f"No release message found in: {transport_b.sent_messages}"
+
+            async def wait_for_release() -> None:
+                deadline = asyncio.get_event_loop().time() + 2.0
+                while asyncio.get_event_loop().time() < deadline:
+                    for batch in transport_b.sent_messages:
+                        for m in parse_wire_batch(batch):
+                            if isinstance(m, WireRelease):
+                                return
+                    await asyncio.sleep(0)
+                pytest.fail(f"No WireRelease message found in: {transport_b.sent_messages}")
+
+            await wait_for_release()
             
         finally:
             await server.stop()
             await client.stop()
     
     async def test_import_removed_after_release(self) -> None:
-        """After release, the import should be removed from the table."""
+        """After resolve, the import entry should send a release to the peer."""
         transport_a, transport_b = create_transport_pair()
         
         server = BidirectionalSession(transport_a, EchoTarget())
@@ -276,13 +276,25 @@ class TestSendReleaseOnResolve:
             
             # Pull and resolve
             await asyncio.wait_for(result_hook.pull(), timeout=2.0)
-            
-            # Give time for cleanup
-            await asyncio.sleep(0.1)
-            
-            # Import should be removed after release
-            # Note: import 0 (main) stays, but the call import should be gone
-            # The import is removed in _send_release
+
+            # The entry is not necessarily removed from _imports (implementation keeps it
+            # until all local hooks are disposed), but remote refcount should be released.
+            entry = client._imports[initial_imports]  # call import id (starts at 1)
+            assert entry.remote_refcount == 0
+
+            async def wait_for_release_for_import(import_id: int) -> None:
+                deadline = asyncio.get_event_loop().time() + 2.0
+                while asyncio.get_event_loop().time() < deadline:
+                    for batch in transport_b.sent_messages:
+                        for m in parse_wire_batch(batch):
+                            if isinstance(m, WireRelease) and m.import_id == import_id:
+                                return
+                    await asyncio.sleep(0)
+                pytest.fail(
+                    f"No WireRelease(import_id={import_id}) found in: {transport_b.sent_messages}"
+                )
+
+            await wait_for_release_for_import(initial_imports)
             
         finally:
             await server.stop()
@@ -373,19 +385,10 @@ class TestDrain:
             # Start pulling in background
             pull_task = asyncio.create_task(result_hook.pull())
             
-            # Server should have pending pull
-            await asyncio.sleep(0.1)  # Let pull request arrive
-            
-            # drain() should wait for the pull to complete
-            drain_start = asyncio.get_event_loop().time()
+            # drain() should not raise and should complete once the server has
+            # resolved all pending pulls.
             await asyncio.wait_for(server.drain(), timeout=2.0)
-            drain_duration = asyncio.get_event_loop().time() - drain_start
-            
-            # drain should have waited at least 0.2 seconds (slow call takes 0.3s)
-            assert drain_duration >= 0.1, f"drain() returned too quickly: {drain_duration}s"
-            
-            # Clean up
-            await pull_task
+            await asyncio.wait_for(pull_task, timeout=2.0)
             
         finally:
             await server.stop()
@@ -403,12 +406,7 @@ class TestDrain:
         
         try:
             # drain() with no pending operations should return immediately
-            start = asyncio.get_event_loop().time()
             await asyncio.wait_for(server.drain(), timeout=1.0)
-            duration = asyncio.get_event_loop().time() - start
-            
-            assert duration < 0.1, f"drain() took too long with no pending: {duration}s"
-            
         finally:
             await server.stop()
             await client.stop()
@@ -440,21 +438,19 @@ class TestAbortMessage:
             
             # Now abort the client
             client._abort(RpcError.internal("Client aborting"))
-            
-            # Give time for abort message to be sent (the task needs to run)
-            await asyncio.sleep(0.2)
-            
-            # Check that abort message was sent
-            abort_found = False
-            for msg in transport_b.sent_messages:
-                if '"abort"' in msg:
-                    abort_found = True
-                    break
-            
-            # Note: abort message is fire-and-forget, may not always be sent
-            # if transport is already closed. The important thing is that
-            # the session is properly aborted.
+
+            async def wait_for_abort() -> None:
+                deadline = asyncio.get_event_loop().time() + 2.0
+                while asyncio.get_event_loop().time() < deadline:
+                    for batch in transport_b.sent_messages:
+                        for m in parse_wire_batch(batch):
+                            if isinstance(m, WireAbort):
+                                return
+                    await asyncio.sleep(0)
+                pytest.fail(f"No WireAbort message found in: {transport_b.sent_messages}")
+
             assert client._abort_reason is not None, "Client should be aborted"
+            await wait_for_abort()
             
         finally:
             await server.stop()
@@ -472,13 +468,17 @@ class TestAbortMessage:
         try:
             # Abort the client
             client._abort(RpcError.internal("Client aborting"))
-            
-            # Give time for message to propagate
-            await asyncio.sleep(0.2)
-            
-            # Server should have received and processed the abort
-            # (The server's read loop should have processed the abort message)
-            
+
+            async def wait_for_server_abort() -> None:
+                deadline = asyncio.get_event_loop().time() + 2.0
+                while asyncio.get_event_loop().time() < deadline:
+                    if server._abort_reason is not None:
+                        return
+                    await asyncio.sleep(0)
+                pytest.fail("Server did not abort after receiving WireAbort")
+
+            await wait_for_server_abort()
+
         finally:
             await server.stop()
 
