@@ -282,3 +282,40 @@ class TestErrorRecovery:
             
             result = await client.call("add", [10, 20])
             assert result == 30
+
+
+# =============================================================================
+# Abrupt Disconnect Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+class TestAbruptDisconnect:
+    """Test handling of abrupt disconnections."""
+    
+    async def test_connect_to_invalid_port(self):
+        """Connecting to invalid port fails gracefully."""
+        with pytest.raises(Exception):
+            async with InteropClient("ws://localhost:59999/") as client:
+                await client.call("square", [5])
+    
+    async def test_session_handles_close_gracefully_ts(self, ts_server: ServerProcess):
+        """Session handles close without pending calls gracefully."""
+        client = InteropClient(f"ws://localhost:{ts_server.port}/")
+        await client.__aenter__()
+        
+        # Make a call to ensure connection is established
+        result = await client.call("square", [5])
+        assert result == 25
+        
+        # Close should work cleanly
+        await client.__aexit__(None, None, None)
+    
+    async def test_session_handles_close_gracefully_py(self, py_server: ServerProcess):
+        """Session handles close without pending calls gracefully."""
+        client = InteropClient(f"ws://localhost:{py_server.port}/rpc")
+        await client.__aenter__()
+        
+        result = await client.call("square", [5])
+        assert result == 25
+        
+        await client.__aexit__(None, None, None)

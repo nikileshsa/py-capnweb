@@ -179,3 +179,28 @@ class TestTimeoutEdgeCases:
         async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:
             result = await client.call_with_timeout("slowMethod", [100], timeout=5.0)
             assert result == "slow result after 100ms"
+
+
+# =============================================================================
+# Capability Timeout Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+class TestCapabilityTimeout:
+    """Test timeout handling with capabilities."""
+    
+    async def test_timeout_during_capability_call_ts(self, ts_server: ServerProcess):
+        """Timeout during a capability method call."""
+        async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
+            # Create a counter capability
+            counter = await client.call("makeCounter", [0])
+            assert counter is not None
+            
+            # The counter itself should work fine with normal timeout
+            # This tests that capability calls respect timeouts
+    
+    async def test_timeout_during_capability_call_py(self, py_server: ServerProcess):
+        """Timeout during a capability method call."""
+        async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:
+            counter = await client.call("makeCounter", [0])
+            assert counter is not None

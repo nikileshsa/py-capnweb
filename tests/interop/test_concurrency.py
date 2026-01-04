@@ -331,3 +331,75 @@ class TestConcurrentCapabilities:
             
             assert len(counters) == 5
             assert all(c is not None for c in counters)
+
+
+# =============================================================================
+# Concurrent Bidirectional Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+class TestConcurrentBidirectional:
+    """Test bidirectional concurrent operations."""
+    
+    async def test_concurrent_different_methods_ts(self, ts_server: ServerProcess):
+        """Concurrent calls to different methods work correctly."""
+        async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
+            # Mix of different operations running concurrently
+            tasks = [
+                client.call("square", [5]),
+                client.call("add", [10, 20]),
+                client.call("greet", ["World"]),
+                client.call("echo", [{"key": "value"}]),
+                client.call("square", [7]),
+            ]
+            results = await asyncio.gather(*tasks)
+            
+            assert results[0] == 25
+            assert results[1] == 30
+            assert results[2] == "Hello, World!"
+            assert results[3] == {"key": "value"}
+            assert results[4] == 49
+    
+    async def test_concurrent_different_methods_py(self, py_server: ServerProcess):
+        """Concurrent calls to different methods work correctly."""
+        async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:
+            tasks = [
+                client.call("square", [5]),
+                client.call("add", [10, 20]),
+                client.call("greet", ["World"]),
+                client.call("echo", [{"key": "value"}]),
+                client.call("square", [7]),
+            ]
+            results = await asyncio.gather(*tasks)
+            
+            assert results[0] == 25
+            assert results[1] == 30
+            assert results[2] == "Hello, World!"
+            assert results[3] == {"key": "value"}
+            assert results[4] == 49
+    
+    async def test_rapid_fire_calls_ts(self, ts_server: ServerProcess):
+        """Rapid fire calls without waiting for responses."""
+        async with InteropClient(f"ws://localhost:{ts_server.port}/") as client:
+            # Start many calls without awaiting
+            tasks = []
+            for i in range(30):
+                tasks.append(asyncio.create_task(client.call("square", [i])))
+            
+            # Now await all
+            results = await asyncio.gather(*tasks)
+            
+            for i, result in enumerate(results):
+                assert result == i * i
+    
+    async def test_rapid_fire_calls_py(self, py_server: ServerProcess):
+        """Rapid fire calls without waiting for responses."""
+        async with InteropClient(f"ws://localhost:{py_server.port}/rpc") as client:
+            tasks = []
+            for i in range(30):
+                tasks.append(asyncio.create_task(client.call("square", [i])))
+            
+            results = await asyncio.gather(*tasks)
+            
+            for i, result in enumerate(results):
+                assert result == i * i
