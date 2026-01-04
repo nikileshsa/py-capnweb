@@ -1,5 +1,7 @@
 # WebTransport Example
 
+> ⚠️ **Known Issue**: The WebTransport RPC layer currently has a timeout bug. The connection establishes successfully but RPC calls may timeout. This is being investigated.
+
 This example demonstrates using WebTransport/HTTP/3 for high-performance RPC communication with Cap'n Web.
 
 ## Features

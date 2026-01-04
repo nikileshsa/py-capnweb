@@ -5,25 +5,49 @@ A real-time chat application demonstrating WebSocket transport and bidirectional
 ## Features
 
 - WebSocket transport for persistent connections
-- Bidirectional RPC (server can call client methods)
-- Multiple connected clients
+- Bidirectional RPC (server calls client methods)
 - Broadcasting messages to all clients
-- Client capability management
+- Client callback capability management
 
 ## Running
 
-### Terminal 1 - Start the server
+### Step 1: Start the server
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/chat/server.py
 ```
 
-### Terminal 2+ - Run clients
+**Expected output:**
+```
+💬 Chat Server running on ws://127.0.0.1:8080/rpc/ws
+
+Methods:
+  - join(username, callback) → Welcome message
+  - sendMessage(username, text) → Broadcasts to all
+  - listUsers() → List of connected users
+  - leave(username) → Goodbye message
+
+Run client: uv run python examples/chat/client.py
+Press Ctrl+C to stop
+```
+
+### Step 2: Run the client (new terminal)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/chat/client.py
+```
+
+**Expected output:**
+```
+Enter your username: Alice
+Joined chat as Alice
+Users online: ['Alice']
+
+Type a message and press Enter (or /quit to leave):
+> Hello everyone!
+[Alice]: Hello everyone!
 ```
 
 Run multiple clients in different terminals to chat between them.

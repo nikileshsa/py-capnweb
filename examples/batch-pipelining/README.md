@@ -11,18 +11,37 @@ Demonstrates HTTP batch RPC with multiple calls in a single request.
 
 ## Running
 
-### Terminal 1 - Start the server
+### Step 1: Start the server
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/batch-pipelining/server.py
 ```
 
-### Terminal 2 - Run the client
+### Step 2: Run the client (new terminal)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/batch-pipelining/client.py
+```
+
+**Expected output:**
+```
+============================================================
+HTTP Batch RPC - Pipelining Demo
+============================================================
+
+--- Running sequential calls ---
+HTTP requests: 3
+Time: 329.54 ms
+Authenticated user: {'id': 'u_1', 'name': 'Ada Lovelace'}
+Profile: {'id': 'u_1', 'bio': 'Mathematician & first programmer'}
+Notifications: ['Welcome to capnweb!', 'You have 2 new followers']
+
+--- Running batched calls ---
+HTTP requests: 3
+Time: 325.73 ms
+...
 ```
 
 ## Architecture

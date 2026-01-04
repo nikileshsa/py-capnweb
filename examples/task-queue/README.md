@@ -62,17 +62,50 @@ A cutting-edge application demonstrating advanced Cap'n Web patterns:
 
 ## Running
 
-1. Start the supervisor:
-   ```bash
-   uv run python examples/task-queue/server.py
-   ```
+### Step 1: Start the server
 
-2. Run the test suite:
-   ```bash
-   uv run python examples/task-queue/test_task_queue.py
-   ```
+```bash
+cd capnweb-python
+uv run python examples/task-queue/server.py
+```
 
-3. Run interactive client:
-   ```bash
-   uv run python examples/task-queue/client.py
-   ```
+**Expected output:**
+```
+INFO:__main__:Task Queue Server running on ws://127.0.0.1:8080/rpc/ws
+INFO:__main__:Run test: uv run python examples/task-queue/test_task_queue.py
+```
+
+### Step 2: Run the test suite (new terminal)
+
+```bash
+cd capnweb-python
+uv run python examples/task-queue/test_task_queue.py
+```
+
+**Expected output:**
+```
+============================================================
+  DISTRIBUTED TASK QUEUE - COMPREHENSIVE TEST SUITE
+============================================================
+
+============================================================
+TEST 1: Basic Task Submission and Execution
+============================================================
+  ✓ Task queue capability obtained
+  ✓ Task submitted and capability returned
+  ✓ Task info is correct
+  ✓ Worker executed task successfully
+  ✓ Task status updated to completed
+  ✅ TEST 1 PASSED
+
+============================================================
+TEST 2: Nested Capability Passing
+============================================================
+  ✓ Task has storage capability
+  ✓ Task has network capability
+  ✓ Worker used storage capability from task
+  ✓ Worker used network capability from task
+  ✓ Nested capabilities passed correctly
+  ✅ TEST 2 PASSED
+...
+```

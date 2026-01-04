@@ -40,6 +40,42 @@ Demonstrates a microservices architecture using Cap'n Web with capability-based 
 
 ## Running
 
+### Step 1: Start the server
+
+```bash
+cd capnweb-python
+uv run python examples/microservices/server.py
+```
+
+### Step 2: Run the client (new terminal)
+
+```bash
+cd capnweb-python
+uv run python examples/microservices/client.py
+```
+
+**Expected output:**
+```
+Microservices Demo
+==================
+
+1. Login as alice...
+   Token: token_alice_1
+   User: alice (admin)
+
+2. Create an order...
+   Order created
+
+3. List orders...
+   Orders: [...]
+```
+
+---
+
+### Alternative: Multi-Service Architecture
+
+For the full distributed architecture, run each service separately:
+
 ### Terminal 1 - User Service
 
 ```bash

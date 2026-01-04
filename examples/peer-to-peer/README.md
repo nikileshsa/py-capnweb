@@ -11,18 +11,53 @@ Demonstrates peer-to-peer communication where both parties can act as client and
 
 ## Running
 
-### Terminal 1 - Start Alice
+### Step 1: Start Alice (Terminal 1)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/peer-to-peer/alice.py
 ```
 
-### Terminal 2 - Start Bob
+**Expected output:**
+```
+🚀 Starting Alice on port 8080...
+✅ Alice is running!
+   - Alice exports her capabilities at http://127.0.0.1:8080/rpc/batch
+   - Alice can receive calls from Bob
+
+🔗 Connecting to Bob at http://127.0.0.1:8081...
+📞 Alice calls Bob.greet()...
+❌ Could not connect to Bob: ...
+   Make sure bob.py is running!
+
+⏳ Alice is waiting for calls from Bob...
+```
+
+> Note: Alice tries to connect to Bob on startup. If Bob isn't running yet, this is expected to fail. Alice will continue running and accept connections.
+
+### Step 2: Start Bob (Terminal 2)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/peer-to-peer/bob.py
+```
+
+**Expected output:**
+```
+🚀 Starting Bob on port 8081...
+✅ Bob is running!
+   - Bob exports his capabilities at http://127.0.0.1:8081/rpc/batch
+   - Bob can receive calls from Alice
+
+🔗 Connecting to Alice at http://127.0.0.1:8080...
+📞 Bob calls Alice.greet()...
+   ← Hello! I'm Alice.
+📞 Bob calls Alice.chat('Hi Alice!')...
+   ← Alice says: Thanks for the message #1!
+📞 Bob calls Alice.get_stats()...
+   ← {'name': 'Alice', 'messages_received': 1}
+
+⏳ Bob is waiting for calls from Alice...
 ```
 
 ## Architecture

@@ -42,18 +42,40 @@ Demonstrates a distributed actor system using Cap'n Web with location-transparen
 
 ## Running
 
-### Terminal 1 - Start the Supervisor
+### Step 1: Start the Supervisor
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/actor-system/supervisor.py
 ```
 
-### Terminal 2 - Run the Client
+### Step 2: Run the client (new terminal)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/actor-system/client.py
+```
+
+**Expected output:**
+```
+--- Distributed Actor System Demo ---
+
+1. Spawning two workers...
+   ✓ Spawned Worker-A and Worker-B
+
+2. Interacting directly with workers...
+
+3. Sending 'increment' messages to workers...
+   ✓ Sent two increments to Worker-A, one to Worker-B
+
+4. Verifying final worker states...
+   - Final count for Worker-A: 2
+   - Final count for Worker-B: 1
+
+✅ Demo finished successfully!
+
+5. Listing all workers via supervisor...
+   Active workers: ['Worker-A', 'Worker-B']
 ```
 
 ## Key Concepts

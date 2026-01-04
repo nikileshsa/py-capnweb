@@ -6,22 +6,55 @@ A simple RPC calculator demonstrating basic Cap'n Web usage with HTTP batch tran
 
 - Basic arithmetic operations (add, subtract, multiply, divide)
 - HTTP batch RPC transport
-- Simple server/client architecture
+- Error handling (division by zero)
 
 ## Running
 
-### Terminal 1 - Start the server
+### Step 1: Start the server
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/calculator/server.py
 ```
 
-### Terminal 2 - Run the client
+**Expected output:**
+```
+🧮 Calculator server running on http://127.0.0.1:8080
+   Endpoint: http://127.0.0.1:8080/rpc/batch
+
+Run client with: uv run python examples/calculator/client.py
+Press Ctrl+C to stop
+```
+
+### Step 2: Run the client (new terminal)
 
 ```bash
-cd py-capnweb
+cd capnweb-python
 uv run python examples/calculator/client.py
+```
+
+**Expected output:**
+```
+🧮 Calculator Client
+========================================
+
+Testing add(5, 3)...
+  5 + 3 = 8
+
+Testing subtract(10, 4)...
+  10 - 4 = 6
+
+Testing multiply(7, 6)...
+  7 × 6 = 42
+
+Testing divide(20, 4)...
+  20 ÷ 4 = 5.0
+
+Testing divide(10, 0) - should fail...
+  Expected error: bad_request: Division by zero
+
+========================================
+✅ All tests completed!
 ```
 
 ## Architecture

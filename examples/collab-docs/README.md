@@ -2,6 +2,47 @@
 
 A real-world application demonstrating all Cap'n Web features:
 
+## Running
+
+### Step 1: Start the server
+
+```bash
+cd capnweb-python
+uv run python examples/collab-docs/server.py
+```
+
+### Step 2: Run the test suite (new terminal)
+
+```bash
+cd capnweb-python
+uv run python examples/collab-docs/test_collab_docs.py
+```
+
+**Expected output:**
+```
+============================================================
+  COLLABORATIVE DOCS - COMPREHENSIVE TEST SUITE
+============================================================
+
+============================================================
+TEST 1: Authentication and UserCapability
+============================================================
+  ✓ Login returns token and UserCapability
+  ✓ UserCapability.getProfile() works
+  ✓ Profile data is correct
+  ✅ TEST 1 PASSED
+
+============================================================
+TEST 2: Document Creation and DocumentCapability
+============================================================
+  ✓ createDocument returns DocumentCapability
+  ✓ DocumentCapability.getInfo() returns correct data
+  ✓ DocumentCapability properties work
+  ✓ Document appears in listDocuments()
+  ✅ TEST 2 PASSED
+...
+```
+
 ## Features Demonstrated
 
 1. **Capability-Based Security**
