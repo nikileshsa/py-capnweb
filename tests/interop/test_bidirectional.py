@@ -261,7 +261,6 @@ class TestCapabilityChains:
             counter = await client.call("makeCounter", [10])
             assert counter is not None
     
-    @pytest.mark.xfail(reason="Function callback with empty method name not yet supported")
     async def test_function_callback_ts(self, ts_server: ServerProcess):
         """Pass a function to server, server calls it."""
         from capnweb.types import RpcTarget
@@ -288,7 +287,6 @@ class TestCapabilityChains:
             
             assert result == {"result": 49}
     
-    @pytest.mark.xfail(reason="Function callback with empty method name not yet supported")
     async def test_function_callback_py(self, py_server: ServerProcess):
         """Pass a function to server, server calls it."""
         from capnweb.types import RpcTarget

@@ -93,9 +93,13 @@ def ts_server():
     
     yield proc
     
-    # Cleanup
-    proc.send_signal(signal.SIGINT)
-    proc.wait(timeout=5)
+    # Cleanup - use SIGTERM and handle timeout gracefully
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
 
 
 @pytest.fixture(scope="module")
@@ -117,9 +121,13 @@ def py_server():
     
     yield proc
     
-    # Cleanup
-    proc.send_signal(signal.SIGINT)
-    proc.wait(timeout=5)
+    # Cleanup - use SIGTERM and handle timeout gracefully
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
 
 
 # =============================================================================

@@ -431,6 +431,21 @@ class TargetStubHook(StubHook):
                 args.value if isinstance(args.value, list) else [args.value],
             )
 
+        # Empty method name = function call (invoke target directly if callable)
+        if not method_name:
+            if callable(target):
+                if inspect.iscoroutinefunction(target):
+                    return (
+                        await target(*args.value)
+                        if isinstance(args.value, list)
+                        else await target(args.value)
+                    )
+                return (
+                    target(*args.value) if isinstance(args.value, list) else target(args.value)
+                )
+            msg = "Target is not callable as a function"
+            raise RpcError.bad_request(msg)
+
         # Otherwise, try to call the method directly on the object
         method = getattr(target, method_name)
         if not callable(method):
@@ -461,14 +476,14 @@ class TargetStubHook(StubHook):
         """
         args.ensure_deep_copied()
 
-        if not path:
-            error = RpcError.bad_request("Cannot call target without method name")
-            return ErrorStubHook(error)
-
         # Wrap the async call in a PromiseStubHook
         async def do_call():
             # Determine method name and target object
-            if len(path) == 1:
+            if not path:
+                # Empty path = function call (invoke target directly)
+                method_name = ""
+                current_target = self.target
+            elif len(path) == 1:
                 method_name = str(path[0])
                 current_target = self.target
             else:
