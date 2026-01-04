@@ -41,16 +41,14 @@ pip install -e .
 ```python
 import asyncio
 from aiohttp import web
-from capnweb import RpcTarget, RpcError, aiohttp_batch_rpc_handler
+from capnweb import RpcTarget, aiohttp_batch_rpc_handler
 
 class Calculator(RpcTarget):
-    async def call(self, method: str, args: list):
-        match method:
-            case "add": return args[0] + args[1]
-            case _: raise RpcError.not_found(f"{method} not found")
+    def add(self, a: int, b: int) -> int:
+        return a + b
 
-    async def get_property(self, name: str):
-        raise RpcError.not_found(f"{name} not found")
+    def multiply(self, a: int, b: int) -> int:
+        return a * b
 
 async def main():
     calc = Calculator()
