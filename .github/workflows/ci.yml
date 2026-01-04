@@ -89,6 +89,12 @@ jobs:
             exit 1
           fi
 
-      - name: Run interop tests
+      - name: Run single interop test first
+        timeout-minutes: 3
+        run: |
+          echo "=== Testing single interop test ==="
+          uv run pytest tests/interop/test_interop.py::TestPyClientTsServer::test_simple_square -v --tb=long -x
+
+      - name: Run all interop tests
         timeout-minutes: 10
-        run: uv run pytest tests/interop/ -v --tb=short -x
+        run: uv run pytest tests/interop/ -v --tb=short
