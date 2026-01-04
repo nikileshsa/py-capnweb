@@ -73,5 +73,22 @@ jobs:
           ls -la node_modules/.bin/tsx || echo "tsx not found"
           npx tsx --version
 
+      - name: Test TypeScript server startup
+        working-directory: tests/interop
+        run: |
+          # Start server in background
+          npx tsx ts_server.ts 19999 &
+          PID=$!
+          sleep 3
+          # Check if server is running
+          if kill -0 $PID 2>/dev/null; then
+            echo "TypeScript server started successfully on port 19999"
+            kill $PID
+          else
+            echo "TypeScript server failed to start"
+            exit 1
+          fi
+
       - name: Run interop tests
-        run: uv run pytest tests/interop/ -v --tb=short
+        timeout-minutes: 10
+        run: uv run pytest tests/interop/ -v --tb=short -x
