@@ -1,5 +1,9 @@
 # Cap'n Web Python
 
+[![CI](https://github.com/nikileshsa/capnweb-python/actions/workflows/ci.yml/badge.svg)](https://github.com/nikileshsa/capnweb-python/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-green.svg)](LICENSE)
+
 > ⚠️ **Beta Version** - This library is under active development and not yet production-ready. APIs may change. Use at your own risk in production environments.
 
 A complete Python implementation of the [Cap'n Web protocol](https://github.com/cloudflare/capnweb) - a capability-based RPC system with promise pipelining, structured errors, and multiple transport support.
